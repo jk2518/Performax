@@ -2,7 +2,7 @@
 
 **Project:** Performax Enterprise Performance Management System  
 **Codebase:** `performax_demo`  
-**Total Bugs Resolved:** 31  
+**Total Bugs Resolved:** 34  
 **Modules Covered:** Super Admin · HR Operations · Tech Manager · Intern Portal · Appraisal Evaluation  
 **Last Updated:** October 2, 2026
 
@@ -13,11 +13,11 @@
 | Module | Bugs Found | Bugs Fixed | Verification |
 |---|:---:|:---:|:---:|
 | Super Admin | 5 | 5 | ✅ 100% |
-| HR Operations | 7 | 7 | ✅ 100% |
+| HR Operations | 10 | 10 | ✅ 100% |
 | Tech Manager (M-01 – M-12) | 6 | 6 | ✅ 100% |
 | Intern Portal | 6 | 6 | ✅ 100% |
 | Appraisal Evaluation | 7 | 7 | ✅ 100% |
-| **Grand Total** | **31** | **31** | **✅ All Clear** |
+| **Grand Total** | **34** | **34** | **✅ All Clear** |
 
 ---
 
@@ -56,6 +56,9 @@
 | BUG-AE-05 | Appraisal Evaluation | Missing Employee Metadata in Evaluation Form | 🟠 Medium | Employee Code, Position, Department showed `—` in header cards | Form response only had `employeeId` and `employeeName` | Added `employeeCode`, `positionName`, `departmentName` to form response | `frontend_compat/views.py` | ✅ Fixed |
 | BUG-AE-06 | Appraisal Evaluation | Manager Hub Appraisal Button Wrong Navigation | 🔴 High | "Appraisal" button navigated to generic `/appraisal` list for 80 students | Button only worked if `mentee.activeAppraisal?.id` was truthy | Updated: always navigate `/appraisal/${mentee.activeAppraisal?.id || mentee.id}/manager-evaluation` | `ManagerHubPage.tsx` | ✅ Fixed |
 | BUG-AE-07 | Appraisal Evaluation | 4 POST Endpoints Crashed on Valid Employee IDs | 🔴 High | HTTP 404 for `answers`, `draft`, `submit`, `self-assessment` endpoints | All 4 strictly queried `Appraisal.objects.filter(id=pk).first()` by UUID | All 4 endpoints now use `_resolve_appraisal(pk, user)` with fallback resolution | `frontend_compat/views.py` | ✅ Fixed |
+| BUG-HR-08 | HR Operations | Mentors Summary Card Inactivity & Modal Absence | 🔴 High | Clicking "MENTORS" card did nothing (only refreshed already-active interns tab) | Card only executed `setActiveTab('interns')` with no dedicated mentor view | Implemented `showMentorsModal` popup with full mentors directory, mentee counts, capacity, "+ Add Mentor", and "View Assigned Mentees" filtering | `epms_frontend/src/pages/HrDashboard.tsx` | ✅ Fixed |
+| BUG-HR-09 | HR Operations | Mentor Username Display & Filter Breakage | 🔴 High | Intern rows displayed internal username `manager_marcus` instead of full name `Marcus Vance`, breaking filtering and mentee counting | Backend serializer `map_employee` used `profile.manager.username` instead of display name | Added `_safe_user_name` helper in `map_employee` and normalized mentor names in frontend mapping | `backend/apps/frontend_compat/views.py`, `epms_frontend/src/pages/HrDashboard.tsx` | ✅ Fixed |
+| BUG-HR-10 | HR Operations | Summary Stat Cards Filtering Inactivity | 🟠 Medium | Summary cards ("Total Interns", "Achieved", "Progressing", "Focus Needed") were static and unclickable | No `onClick` handlers or active filter state triggers were bound to summary cards | Added interactive `onClick` handlers to toggle filter state by classification with colored active highlight rings | `epms_frontend/src/pages/HrDashboard.tsx` | ✅ Fixed |
 
 ---
 
