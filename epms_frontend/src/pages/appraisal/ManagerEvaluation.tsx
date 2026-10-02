@@ -47,7 +47,7 @@ const RatingButton: React.FC<{ value: number; selected: boolean; disabled: boole
 const ManagerEvaluation = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { user, isHR, isAdmin } = useAuth();
+  const { user, isHR, isAdmin, isManager: authIsManager } = useAuth();
 
   const { data: formData, isLoading } = useGetManagerEvaluationFormQuery(id || '', { skip: !id });
   const [saveAnswers, { isLoading: isSaving }] = useSaveManagerEvaluationAnswersMutation();
@@ -85,7 +85,7 @@ const ManagerEvaluation = () => {
   const buildPayload = () => {
     const allQIds = Array.from(new Set([...Object.keys(managerRatings), ...Object.keys(managerComments)]));
     return allQIds.map(qId => ({
-      questionId: Number(qId),
+      questionId: isNaN(Number(qId)) ? qId : Number(qId),
       ratingValue: managerRatings[qId] || 0,
       comment: managerComments[qId] || null,
     }));
@@ -118,9 +118,14 @@ const ManagerEvaluation = () => {
     <div style={{ padding: '48px 24px', textAlign: 'center', fontSize: 13, color: '#9EA3B0' }}>Evaluation form could not be loaded.</div>
   );
 
-  const isManager = formData.managerId != null
-    ? Number(user?.id) === Number(formData.managerId)
-    : !(isHR || isAdmin);
+  const isAssignedManager = formData.managerId != null && Boolean(
+    user && (
+      String(user.id) === String(formData.managerId) ||
+      (user.profile && String(user.profile.id) === String(formData.managerId)) ||
+      ((user as any).profileId && String((user as any).profileId) === String(formData.managerId))
+    )
+  );
+  const isManager = isAssignedManager || authIsManager || !(isHR || isAdmin);
   const isReadOnly = !isManager || formData.appraisalStatus === 'HR_APPROVED' || formData.appraisalStatus === 'FINALIZED';
   const isDisabled = isSubmitting || isReadOnly;
 

@@ -58,6 +58,7 @@ class EmployeeProfile(models.Model):
         default=EmploymentStatus.ACTIVE
     )
     phone_number = models.CharField(max_length=20, blank=True, null=True)
+    profile_image = models.ImageField(upload_to='avatars/', null=True, blank=True)
     emergency_contact = models.TextField(blank=True, null=True)
     
     # Identification (NRC) fields

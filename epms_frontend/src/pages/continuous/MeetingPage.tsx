@@ -334,11 +334,17 @@ const MeetingPage = () => {
   const filteredEmployees = (isAdmin || isHR)
     ? employees
     : employees?.filter(emp =>
-        emp.currentDepartmentName && user?.currentDepartmentName &&
-        emp.currentDepartmentName === user?.currentDepartmentName &&
-        emp.id !== user?.id &&
-        (emp.levelRank === undefined || emp.levelRank === null || emp.levelRank !== minRankInDept) &&
-        (emp.levelRank === undefined || emp.levelRank === null || user?.levelRank === undefined || user?.levelRank === null || emp.levelRank >= user.levelRank)
+        emp.id !== user?.id && (
+          String(emp.directManagerId) === String(user?.id) ||
+          String(emp.directManagerId) === String(user?.profile?.id) ||
+          (emp.directManagerName && (emp.directManagerName === user?.username || emp.directManagerName === user?.staffName)) ||
+          (
+            emp.currentDepartmentName && user?.currentDepartmentName &&
+            emp.currentDepartmentName === user?.currentDepartmentName &&
+            (emp.levelRank === undefined || emp.levelRank === null || emp.levelRank !== minRankInDept) &&
+            (emp.levelRank === undefined || emp.levelRank === null || user?.levelRank === undefined || user?.levelRank === null || emp.levelRank >= user.levelRank)
+          )
+        )
       );
 
   const [scheduleMeeting, { isLoading: isScheduling }] = useScheduleMeetingMutation();
@@ -352,24 +358,24 @@ const MeetingPage = () => {
   const [expandedMeetingId, setExpandedMeetingId] = useState<number | null>(null);
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editingEmployee, setEditingEmployee] = useState<{ id: number; name: string } | null>(null);
+  const [editingEmployee, setEditingEmployee] = useState<{ id: number | string; name: string } | null>(null);
   const [meetingToDelete, setMeetingToDelete] = useState<number | null>(null);
   const [reopenConfig, setReopenConfig] = useState<{ meetingId: number, item: any } | null>(null);
   const [reopenReason, setReopenReason] = useState("");
 
   interface MeetingState {
-    employeeId: number;
+    employeeId: number | string;
     meetingTitle: string;
     meetingDate: string;
     meetingTime: string;
     discussionPoints: string;
     keyIssues: string;
-    actionItems: { id?: number; content: string; status?: string; assignedToId?: number; dueDate?: string }[];
+    actionItems: { id?: number; content: string; status?: string; assignedToId?: number | string; dueDate?: string }[];
     followUpDate: string;
   }
 
   const [newMeeting, setNewMeeting] = useState<MeetingState>({
-    employeeId: 0,
+    employeeId: "",
     meetingTitle: "",
     meetingDate: "",
     meetingTime: "",
@@ -431,7 +437,7 @@ const MeetingPage = () => {
       setShowModal(false);
       setEditingId(null);
       setNewMeeting({
-        employeeId: 0,
+        employeeId: "",
         meetingTitle: "",
         meetingDate: "",
         meetingTime: "",
@@ -936,7 +942,7 @@ const MeetingPage = () => {
                       </div>
                     ) : (
                       <select required className="office-input" value={newMeeting.employeeId || ""}
-                        onChange={e => setNewMeeting({ ...newMeeting, employeeId: Number(e.target.value) })}>
+                        onChange={e => setNewMeeting({ ...newMeeting, employeeId: e.target.value })}>
                         <option value="">Choose Member…</option>
                         {filteredEmployees?.map(emp => <option key={emp.id} value={emp.id}>{emp.staffName}</option>)}
                       </select>
@@ -1066,7 +1072,7 @@ const MeetingPage = () => {
                       setEditingId(null);
                       setEditingEmployee(null);
                       setNewMeeting({
-                        employeeId: 0,
+                        employeeId: "",
                         meetingTitle: "",
                         meetingDate: "",
                         meetingTime: "",

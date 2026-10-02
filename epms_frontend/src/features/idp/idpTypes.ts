@@ -44,8 +44,8 @@ export interface IdpResponse {
 }
 
 export interface IdpCreateRequest {
-  employeeId: number;
-  managerId?: number;
+  employeeId: number | string;
+  managerId?: number | string;
   appraisalId?: number;
   title: string;
   summary?: string;

@@ -1100,7 +1100,7 @@ export const PerformanceHistoryAdminPage = () => {
   // Queries wired to date range and filters
   const { data: employeeHistoryResponse, isLoading: isEmpHistoryLoading } = useGetPerformanceHistoryByEmployeeQuery(
     { 
-      employeeId: Number(selectedEmpId) || 0, 
+      employeeId: selectedEmpId, 
       sourceType: filterType,
       isConducted: auditPerspective === 'given' ? true : (auditPerspective === 'received' ? false : undefined),
       page: currentPage - 1, 

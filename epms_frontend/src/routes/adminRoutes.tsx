@@ -23,6 +23,7 @@ export const adminRoutes = [
   { path: "/employees", element: <EmployeeList /> },
   { path: "/employees/new", element: <EmployeeForm /> },
   { path: "/employees/edit/:id", element: <EmployeeForm /> },
+  { path: "/employees/:id", element: <EmployeeProfileView /> },
   { path: "/employees/:id/profile", element: <EmployeeProfileView /> },
   { path: "/employees/:id/departments", element: <EmployeeDepartmentHistory /> },
   { path: "/departments", element: <DepartmentList /> },

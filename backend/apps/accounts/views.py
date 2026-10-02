@@ -35,6 +35,7 @@ class CurrentUserView(APIView):
             position_name = profile.designation
             dept_name = profile.department.name if profile.department else "General"
             manager_name = profile.manager.username if profile.manager else None
+            profile_img = profile.profile_image.url if (hasattr(profile, 'profile_image') and profile.profile_image) else None
             data['profile'] = {
                 'id': str(profile.id),
                 'employee_code': profile.employee_code,
@@ -49,8 +50,12 @@ class CurrentUserView(APIView):
                 'joining_date': str(profile.joining_date),
                 'employment_status': profile.employment_status,
                 'phone_number': profile.phone_number,
+                'profile_image': profile_img,
+                'profileImage': profile_img,
             }
         else:
+            profile = None
+            profile_img = None
             data['profile'] = None
 
         roles = [user.role]
@@ -60,13 +65,15 @@ class CurrentUserView(APIView):
             roles.append('EMPLOYEE')
 
         employee_data = {
-            'id': str(user.id),
+            'id': str(profile.id) if profile else str(user.id),
             'employeeCode': emp_code,
             'staffName': staff_name,
+            'otherName': getattr(profile, 'other_name', '') if profile else '',
             'email': user.email,
-            'phoneNo': getattr(getattr(user, 'profile', None), 'phone_number', '') or '',
+            'phoneNo': getattr(profile, 'phone_number', '') if profile else '',
+            'profileImage': profile_img,
             'positionName': position_name,
-            'positionId': 1,
+            'positionId': profile.position.id if (profile and profile.position) else 1,
             'levelName': user.role,
             'levelRank': 1,
             'currentDepartmentName': dept_name,
@@ -75,6 +82,13 @@ class CurrentUserView(APIView):
             'isActive': user.is_active,
             'accountLocked': False,
             'directManagerName': manager_name,
+            'contactAddress': getattr(profile, 'contact_address', '') if profile else '',
+            'permanentAddress': getattr(profile, 'permanent_address', '') if profile else '',
+            'maritalStatus': getattr(profile, 'marital_status', None) if profile else None,
+            'spouseName': getattr(profile, 'spouse_name', '') if profile else '',
+            'fatherName': getattr(profile, 'father_name', '') if profile else '',
+            'gender': getattr(profile, 'gender', '') if profile else '',
+            'dateOfBirth': str(getattr(profile, 'date_of_birth', '')) if (profile and profile.date_of_birth) else '',
             'user': data.copy(),
             'profile': data.get('profile')
         }

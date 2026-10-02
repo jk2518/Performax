@@ -81,6 +81,7 @@ class ManagerMenteesView(APIView):
                 'firstName': emp.first_name,
                 'lastName': emp.last_name,
                 'fullName': emp.full_name,
+                'name': emp.full_name or f"{emp.first_name} {emp.last_name}".strip() or emp.user.username,
                 'email': emp.user.email,
                 'designation': emp.designation,
                 'department': emp.department.name if emp.department else 'General Engineering',

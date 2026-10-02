@@ -6,7 +6,7 @@ from rest_framework import status
 from apps.evidence.models import EvidenceSubmission
 from apps.performance.models import PerformanceCycle, TechnicalCapabilityParameter, TechnicalCapabilityReview
 from apps.employees.models import EmployeeProfile
-from .base import IsManagerUser
+from .base import IsManagerUser, get_manager_reports_qs
 
 
 # =====================================================================
@@ -22,17 +22,28 @@ class ManagerTechnicalReviewsView(APIView):
 
     def get(self, request):
         emp_id = request.query_params.get('employee_id') or request.query_params.get('employeeId')
-        if not emp_id:
-            return Response({'code': 400, 'message': 'employee_id parameter is required.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        profile = EmployeeProfile.objects.filter(
-            Q(id__iexact=str(emp_id)) |
-            Q(user__id__iexact=str(emp_id)) |
-            Q(employee_code__iexact=str(emp_id))
-        ).first()
+        profile = None
+        if emp_id:
+            profile = EmployeeProfile.objects.filter(
+                Q(id__iexact=str(emp_id)) |
+                Q(user__id__iexact=str(emp_id)) |
+                Q(employee_code__iexact=str(emp_id))
+            ).first()
+        else:
+            profile = get_manager_reports_qs(request.user).first()
 
         if not profile:
-            return Response({'code': 404, 'message': 'Intern/Employee not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({
+                'code': 200,
+                'message': 'No intern/mentee selected or found.',
+                'data': {
+                    'employee': None,
+                    'parameters': [],
+                    'overallScore': 0.0,
+                    'status': 'DRAFT',
+                    'submissionCount': 0
+                }
+            })
 
         params = TechnicalCapabilityParameter.objects.filter(is_active=True).order_by('category', 'name')
         existing_reviews = {

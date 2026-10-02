@@ -68,7 +68,7 @@ const AppraisalList: React.FC = () => {
   const isPrivileged = isAdmin || isHR;
 
   const [activeTab, setActiveTab] = React.useState<'appraisals' | 'team' | 'cycles' | 'forms'>(
-    location.state?.activeTab || (isPrivileged ? 'cycles' : 'appraisals')
+    location.state?.activeTab || (isPrivileged ? 'cycles' : (isManager ? 'team' : 'appraisals'))
   );
   const [selectedCycleId, setSelectedCycleId] = React.useState<number | null>(null);
   const [expandedCycle, setExpandedCycle] = React.useState<string | null>(location.state?.expandedCycle || null);
@@ -77,7 +77,7 @@ const AppraisalList: React.FC = () => {
   const [newSetName, setNewSetName] = React.useState('');
   const [searchTerm, setSearchTerm] = React.useState('');
   const [departmentFilter, setDepartmentFilter] = React.useState('ALL');
-  const [statusFilter, setStatusFilter] = React.useState('ALL');
+  const [statusFilter, setStatusFilter] = React.useState(location.state?.statusFilter || 'ALL');
   const [participantPage, setParticipantPage] = React.useState(1);
   const participantPageSize = 10;
 

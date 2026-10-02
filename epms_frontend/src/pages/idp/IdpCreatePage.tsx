@@ -116,7 +116,7 @@ const IdpCreatePage = () => {
 
     try {
       const response = await createIdp({
-        employeeId: Number(formData.employeeId),
+        employeeId: formData.employeeId,
         title: formData.title,
         summary: formData.summary,
         startDate: formData.startDate,

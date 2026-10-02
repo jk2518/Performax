@@ -175,13 +175,14 @@ export const employeeApi = api.injectEndpoints({
 
     uploadProfileImage: builder.mutation<
       ApiResponse<any>,
-      { id: number; file: File }
+      { id: number | string; file: File }
     >({
       query: ({ id, file }) => {
         const formData = new FormData();
         formData.append("file", file);
+        const url = id && String(id).toLowerCase() !== "me" ? `/emp/${id}/profile` : `/emp/me/profile`;
         return {
-          url: `/emp/me/profile`,
+          url,
           method: "POST",
           body: formData,
         };

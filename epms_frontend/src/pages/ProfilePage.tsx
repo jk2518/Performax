@@ -68,6 +68,14 @@ const formatDate = (date?: string) => {
     : parsed.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 };
 
+const getAvatarUrl = (img?: string | null) => {
+  if (!img || img === "default.jpg") return null;
+  if (img.startsWith("blob:") || img.startsWith("data:") || img.startsWith("http://") || img.startsWith("https://")) {
+    return img;
+  }
+  return img.startsWith("/") ? img : `/${img}`;
+};
+
 const ProfilePage = () => {
   const navigate = useNavigate();
   const { data: profile, isLoading: isProfileLoading } = useGetCurrentUserQuery();
@@ -191,9 +199,12 @@ const ProfilePage = () => {
           >
             {profile.profileImage && profile.profileImage !== "default.jpg" ? (
               <img
-                src={`http://localhost:8000${profile.profileImage}`}
+                src={getAvatarUrl(profile.profileImage) || ""}
                 alt={profile.staffName}
                 className="w-full h-full object-cover"
+                onError={(e) => {
+                  e.currentTarget.style.display = "none";
+                }}
               />
             ) : (
               profile.staffName?.charAt(0) || "?"

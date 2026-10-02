@@ -44,7 +44,7 @@ class HrCyclesView(APIView):
             'startDate': str(c.start_date),
             'endDate': str(c.end_date),
             'status': c.status,
-            'isLocked': c.is_locked,
+            'isLocked': getattr(c, 'is_locked', c.status == 'LOCKED'),
         } for c in cycles]
         return Response({'code': 200, 'data': data})
 
@@ -70,7 +70,7 @@ class HrCriteriaView(APIView):
             'id': str(c.id),
             'name': c.name,
             'description': c.description,
-            'weightage': float(c.weightage),
+            'weightage': float(getattr(c, 'weightage', getattr(c, 'weight', 0.0))),
             'isActive': c.is_active,
         } for c in criteria]
         return Response({'code': 200, 'data': data})
@@ -80,15 +80,15 @@ class HrPipOverviewView(APIView):
     permission_classes = [IsHrOrAdminUser]
 
     def get(self, request):
-        pips = PerformanceImprovementPlan.objects.select_related('employee', 'manager', 'cycle').all()
+        pips = PerformanceImprovementPlan.objects.select_related('employee', 'created_by').all()
         data = [{
             'id': str(p.id),
-            'employeeName': p.employee.full_name if hasattr(p.employee, 'full_name') else p.employee.username,
-            'managerName': p.manager.username if p.manager else 'Unassigned',
+            'employeeName': getattr(p.employee, 'full_name', getattr(p.employee, 'username', 'Unknown')),
+            'managerName': getattr(getattr(p, 'created_by', None), 'username', 'Unassigned'),
             'status': p.status,
             'startDate': str(p.start_date),
             'endDate': str(p.end_date),
-            'rootCause': p.root_cause_analysis,
+            'rootCause': getattr(p, 'root_cause_analysis', ''),
         } for p in pips]
         return Response({'code': 200, 'data': data})
 

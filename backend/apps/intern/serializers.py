@@ -36,6 +36,7 @@ def validate_file_attachment(file_obj):
 
 class InternGoalListSerializer(serializers.ModelSerializer):
     progress = serializers.FloatField(source='completion_percentage', read_only=True)
+    weight = serializers.FloatField(default=10.0, read_only=True)
     cycle_name = serializers.CharField(source='cycle.name', read_only=True)
     assigned_by_name = serializers.CharField(source='assigned_by.username', read_only=True, default='Mentor')
     comments_count = serializers.IntegerField(source='goal_comments.count', read_only=True)

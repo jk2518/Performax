@@ -364,17 +364,17 @@ export const continuousApi = api.injectEndpoints({
       transformResponse: (response: ApiResponse<GoalsPulseOverlayResponse>) => response.data,
       providesTags: ["PerformanceHistory" as any],
     }),
-    getEmployeePerformanceHistoryAnalytics: builder.query<PerformanceHistoryResponse[], number>({
+    getEmployeePerformanceHistoryAnalytics: builder.query<PerformanceHistoryResponse[], number | string>({
       query: (employeeId) => `/performance-history/employee/${employeeId}/raw`,
       transformResponse: (response: ApiResponse<PerformanceHistoryResponse[]>) => response.data,
       providesTags: ["PerformanceHistory" as any],
     }),
-    getFeedbackStats: builder.query<ContinuousStatsResponse, number>({
+    getFeedbackStats: builder.query<ContinuousStatsResponse, number | string>({
       query: (employeeId) => `/feedbacks/employee/${employeeId}/stats`,
       transformResponse: (response: ApiResponse<ContinuousStatsResponse>) => response.data,
       providesTags: ["ContinuousFeedback" as any],
     }),
-    getMeetingStats: builder.query<ContinuousStatsResponse, number>({
+    getMeetingStats: builder.query<ContinuousStatsResponse, number | string>({
       query: (employeeId) => `/meetings/employee/${employeeId}/stats`,
       transformResponse: (response: ApiResponse<ContinuousStatsResponse>) => response.data,
       providesTags: ["OneOnOneMeeting" as any],

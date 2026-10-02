@@ -10,6 +10,7 @@ interface StatCardProps {
   };
   color?: string;
   subtitle?: string;
+  onClick?: () => void;
 }
 
 const COLOR_MAP: Record<string, { bg: string; text: string; border: string }> = {
@@ -28,11 +29,20 @@ const DashboardStatCard: React.FC<StatCardProps> = ({
   trend,
   color = "indigo",
   subtitle,
+  onClick,
 }) => {
   const colors = COLOR_MAP[color] ?? COLOR_MAP.indigo;
 
   return (
-    <div className="dailoqa-card p-5 select-none relative overflow-hidden group">
+    <div
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } } : undefined}
+      className={`dailoqa-card p-5 select-none relative overflow-hidden group transition-all duration-200 ${
+        onClick ? "cursor-pointer hover:border-purple-300 hover:shadow-md active:scale-[0.98]" : ""
+      }`}
+    >
       {/* Top Row: Icon container + Trend Badge */}
       <div className="flex items-start justify-between">
         <div

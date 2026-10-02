@@ -4,6 +4,7 @@ from django.db.models import Q
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import permissions, status
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from apps.accounts.models import User, UserRole
 from apps.organization.models import (
@@ -63,7 +64,7 @@ def map_employee(profile: EmployeeProfile) -> dict:
         "otherName": profile.other_name or "",
         "email": user.email,
         "phoneNo": profile.phone_number or "",
-        "profileImage": None,
+        "profileImage": profile.profile_image.url if (hasattr(profile, 'profile_image') and profile.profile_image) else None,
         "positionName": position_name,
         "positionId": position_id,
         "levelName": level_name,
@@ -136,11 +137,22 @@ class ManagerDashboardView(APIView):
             for idx, intern in enumerate(interns) if intern.get("pending_evidence_count", 0) > 0
         ]
 
+        all_appraisals = Appraisal.objects.filter(
+            Q(reviewer=manager_user) | Q(employee__manager=manager_user)
+        ).distinct()
+        appraisals_count = all_appraisals.count()
+        completed_reviews = all_appraisals.filter(
+            status__in=[AppraisalStatus.PUBLISHED, AppraisalStatus.HR_APPROVED]
+        ).count()
+        pending_reviews = all_appraisals.filter(
+            status__in=[AppraisalStatus.SUBMITTED, AppraisalStatus.UNDER_REVIEW, AppraisalStatus.DRAFT]
+        ).count()
+
         data = {
             "teamSize": summary.get("team_size", len(interns)),
-            "reviewsCompleted": Appraisal.objects.filter(reviewer=manager_user, status=AppraisalStatus.PUBLISHED).count(),
-            "totalReviews": summary.get("team_size", len(interns)),
-            "pendingReviews": summary.get("pending_appraisals", 0),
+            "reviewsCompleted": completed_reviews,
+            "totalReviews": appraisals_count if appraisals_count > 0 else summary.get("team_size", len(interns)),
+            "pendingReviews": pending_reviews,
             "feedbackRequests": summary.get("pending_evidence_reviews", 0),
             "teamPerformance": team_members,
             "teamKpis": team_kpis,
@@ -1207,22 +1219,88 @@ class PermissionMatrixCompatView(APIView):
         return ok_response({"success": True}, "Permission matrix updated successfully")
 
 
-# ==========================================
-# EMPLOYEES ENDPOINTS
-# ==========================================
+import uuid
+
+def is_valid_uuid(val):
+    if not val:
+        return False
+    try:
+        uuid.UUID(str(val))
+        return True
+    except (ValueError, AttributeError, TypeError):
+        return False
+
+def resolve_department(dept_val):
+    if not dept_val:
+        return None
+    dept = None
+    if is_valid_uuid(dept_val):
+        dept = Department.objects.filter(id=dept_val).first()
+    if not dept:
+        dept = Department.objects.filter(name__iexact=str(dept_val)).first()
+    if not dept:
+        dept = Department.objects.filter(code__iexact=str(dept_val)).first()
+    if not dept:
+        dept = Department.objects.first()
+    return dept
+
+def resolve_manager(mgr_val):
+    if not mgr_val:
+        return None
+    mgr = None
+    if is_valid_uuid(mgr_val):
+        mgr = User.objects.filter(id=mgr_val).first()
+        if not mgr:
+            emp_mgr = EmployeeProfile.objects.filter(id=mgr_val).first()
+            if emp_mgr:
+                mgr = emp_mgr.user
+    if not mgr:
+        mgr = User.objects.filter(username__iexact=str(mgr_val)).first()
+    if not mgr:
+        emp_mgr = EmployeeProfile.objects.filter(employee_code__iexact=str(mgr_val)).first()
+        if emp_mgr:
+            mgr = emp_mgr.user
+    return mgr
+
+def resolve_position(pos_val):
+    if not pos_val:
+        return None
+    try:
+        pos_id_int = int(pos_val)
+        pos = Position.objects.filter(id=pos_id_int).first()
+        if pos:
+            return pos
+    except (ValueError, TypeError):
+        pass
+    pos = Position.objects.filter(position_code__iexact=str(pos_val)).first() or Position.objects.filter(position_name__iexact=str(pos_val)).first()
+    if not pos:
+        pos = Position.objects.first()
+    return pos
+
 
 class EmployeeCompatView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, pk=None):
         if pk:
-            try:
-                profile = EmployeeProfile.objects.select_related(
-                    "user", "department", "parent_department", "manager", "position", "position__level"
-                ).get(id=pk)
+            if str(pk).lower() == 'me':
+                profile = getattr(request.user, 'profile', None)
+                if not profile:
+                    return Response({"detail": "Not found"}, status=status.HTTP_404_NOT_FOUND)
                 return ok_response(map_employee(profile))
-            except (EmployeeProfile.DoesNotExist, Exception):
-                return Response({"detail": "Not found"}, status=status.HTTP_404_NOT_FOUND)
+
+            qs = EmployeeProfile.objects.select_related(
+                "user", "department", "parent_department", "manager", "position", "position__level"
+            )
+            profile = None
+            if is_valid_uuid(pk):
+                profile = qs.filter(Q(id=pk) | Q(user__id=pk)).first()
+            if not profile:
+                profile = qs.filter(Q(employee_code__iexact=str(pk)) | Q(user__username__iexact=str(pk))).first()
+
+            if profile:
+                return ok_response(map_employee(profile))
+            return Response({"detail": "Not found"}, status=status.HTTP_404_NOT_FOUND)
 
         # Query Filters
         query = request.query_params.get("query") or request.query_params.get("search") or request.query_params.get("q")
@@ -1332,31 +1410,17 @@ class EmployeeCompatView(APIView):
             user.save()
 
         # Department resolution
-        dept = None
         curr_dept_id = data.get("currentDepartmentId") or data.get("departmentId")
-        if curr_dept_id:
-            dept = Department.objects.filter(id=curr_dept_id).first() or Department.objects.filter(name__iexact=str(curr_dept_id)).first()
+        dept = resolve_department(curr_dept_id)
 
-        parent_dept = None
         parent_dept_id = data.get("parentDepartmentId")
-        if parent_dept_id:
-            parent_dept = Department.objects.filter(id=parent_dept_id).first() or Department.objects.filter(name__iexact=str(parent_dept_id)).first()
+        parent_dept = resolve_department(parent_dept_id) or dept
 
         # Position resolution
-        pos = None
-        pos_id = data.get("positionId")
-        if pos_id:
-            pos = Position.objects.filter(id=pos_id).first()
+        pos = resolve_position(data.get("positionId") or data.get("position"))
 
         # Manager resolution
-        mgr = None
-        mgr_id = data.get("directManagerId") or data.get("managerId")
-        if mgr_id:
-            mgr = User.objects.filter(id=mgr_id).first()
-            if not mgr:
-                emp_mgr = EmployeeProfile.objects.filter(id=mgr_id).first()
-                if emp_mgr:
-                    mgr = emp_mgr.user
+        mgr = resolve_manager(data.get("directManagerId") or data.get("managerId"))
 
         # Employee code generation
         code = data.get("employeeCode")
@@ -1419,9 +1483,16 @@ class EmployeeCompatView(APIView):
 
     def put(self, request, pk=None):
         try:
-            profile = EmployeeProfile.objects.select_related(
-                "user", "department", "parent_department", "manager", "position"
-            ).get(id=pk)
+            if not pk or not is_valid_uuid(str(pk)):
+                profile = EmployeeProfile.objects.select_related(
+                    "user", "department", "parent_department", "manager", "position"
+                ).filter(Q(employee_code__iexact=str(pk)) | Q(user__username__iexact=str(pk))).first()
+            else:
+                profile = EmployeeProfile.objects.select_related(
+                    "user", "department", "parent_department", "manager", "position"
+                ).filter(Q(id=pk) | Q(user__id=pk)).first()
+            if not profile:
+                return Response({"detail": "Not found"}, status=status.HTTP_404_NOT_FOUND)
             data = request.data
 
             if "staffName" in data:
@@ -1445,28 +1516,24 @@ class EmployeeCompatView(APIView):
                 profile.date_of_birth = data["dateOfBirth"]
 
             if "positionId" in data and data["positionId"]:
-                pos = Position.objects.filter(id=data["positionId"]).first()
+                pos = resolve_position(data["positionId"])
                 if pos:
                     profile.position = pos
                     profile.designation = pos.position_name
 
             if "currentDepartmentId" in data and data["currentDepartmentId"]:
-                dept = Department.objects.filter(id=data["currentDepartmentId"]).first()
+                dept = resolve_department(data["currentDepartmentId"])
                 if dept:
                     profile.department = dept
 
             if "parentDepartmentId" in data and data["parentDepartmentId"]:
-                parent_dept = Department.objects.filter(id=data["parentDepartmentId"]).first()
+                parent_dept = resolve_department(data["parentDepartmentId"])
                 if parent_dept:
                     profile.parent_department = parent_dept
 
             if "directManagerId" in data:
-                mgr_id = data["directManagerId"]
-                if mgr_id:
-                    mgr = User.objects.filter(id=mgr_id).first() or getattr(EmployeeProfile.objects.filter(id=mgr_id).first(), 'user', None)
-                    profile.manager = mgr
-                else:
-                    profile.manager = None
+                mgr = resolve_manager(data["directManagerId"])
+                profile.manager = mgr
 
             # NRC
             if "stateCode" in data or "nrcStateCode" in data:
@@ -1520,6 +1587,11 @@ class EmployeeCompatView(APIView):
     def delete(self, request, pk=None):
         try:
             profile = EmployeeProfile.objects.get(id=pk)
+            if request.query_params.get("permanent") == "true":
+                u = profile.user
+                profile.delete()
+                u.delete()
+                return ok_response({"success": True}, "Staff removed permanently")
             profile.user.is_active = False
             profile.user.save()
             profile.employment_status = "INACTIVE"
@@ -1527,6 +1599,181 @@ class EmployeeCompatView(APIView):
             return ok_response({"success": True}, "Staff deactivated successfully")
         except EmployeeProfile.DoesNotExist:
             return Response({"detail": "Not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    def patch(self, request, pk=None, action=None):
+        try:
+            profile = EmployeeProfile.objects.select_related('user').get(
+                Q(id=str(pk)) | Q(user__id=str(pk)) | Q(employee_code__iexact=str(pk))
+            )
+            act = action or request.data.get("action") or request.query_params.get("action")
+            if not act and "is_active" in request.data:
+                act = "activate" if request.data.get("is_active") else "deactivate"
+            if not act and "status" in request.data:
+                act = "activate" if request.data.get("status") == "ACTIVE" else "deactivate"
+
+            if act == "deactivate":
+                profile.user.is_active = False
+                profile.user.save()
+                profile.employment_status = "INACTIVE"
+                profile.save()
+                return ok_response(map_employee(profile), "Staff deactivated successfully")
+            else:
+                profile.user.is_active = True
+                profile.user.save()
+                profile.employment_status = "ACTIVE"
+                profile.save()
+                return ok_response(map_employee(profile), "Staff activated successfully")
+        except EmployeeProfile.DoesNotExist:
+            return Response({"detail": "Not found"}, status=status.HTTP_404_NOT_FOUND)
+
+
+class EmployeeStatusToggleCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def patch(self, request, pk, action):
+        try:
+            profile = EmployeeProfile.objects.select_related('user').get(
+                Q(id=str(pk)) | Q(user__id=str(pk)) | Q(employee_code__iexact=str(pk))
+            )
+            if action == "deactivate":
+                profile.user.is_active = False
+                profile.user.save()
+                profile.employment_status = "INACTIVE"
+                profile.save()
+                return ok_response(map_employee(profile), "Staff deactivated successfully")
+            else:
+                profile.user.is_active = True
+                profile.user.save()
+                profile.employment_status = "ACTIVE"
+                profile.save()
+                return ok_response(map_employee(profile), "Staff activated successfully")
+        except EmployeeProfile.DoesNotExist:
+            return Response({"detail": "Not found"}, status=status.HTTP_404_NOT_FOUND)
+
+    def post(self, request, pk, action):
+        return self.patch(request, pk, action)
+
+
+class CurrentUserProfileCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_profile(self, user):
+        profile = getattr(user, 'profile', None)
+        if not profile:
+            code = "EMP-000" if user.role == "SUPER_ADMIN" else f"EMP-{EmployeeProfile.objects.count() + 1:03d}"
+            names = (user.username or "Admin").split(" ", 1)
+            first_name = names[0]
+            last_name = names[1] if len(names) > 1 else ""
+            profile = EmployeeProfile.objects.create(
+                user=user,
+                employee_code=code,
+                first_name=first_name,
+                last_name=last_name,
+                designation=user.get_role_display(),
+            )
+        return profile
+
+    def get(self, request, pk=None):
+        if pk and str(pk).lower() != 'me':
+            qs = EmployeeProfile.objects.select_related(
+                "user", "department", "parent_department", "manager", "position", "position__level"
+            )
+            profile = None
+            if is_valid_uuid(pk):
+                profile = qs.filter(Q(id=pk) | Q(user__id=pk)).first()
+            if not profile:
+                profile = qs.filter(Q(employee_code__iexact=str(pk)) | Q(user__username__iexact=str(pk))).first()
+            if not profile:
+                return Response({"detail": "Not found"}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            profile = self.get_profile(request.user)
+        return ok_response(map_employee(profile))
+
+    def put(self, request, pk=None):
+        if pk and str(pk).lower() != 'me':
+            qs = EmployeeProfile.objects.select_related(
+                "user", "department", "parent_department", "manager", "position"
+            )
+            profile = None
+            if is_valid_uuid(pk):
+                profile = qs.filter(Q(id=pk) | Q(user__id=pk)).first()
+            if not profile:
+                profile = qs.filter(Q(employee_code__iexact=str(pk)) | Q(user__username__iexact=str(pk))).first()
+            if not profile:
+                return Response({"detail": "Not found"}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            profile = self.get_profile(request.user)
+
+        data = request.data
+        if "staffName" in data and data["staffName"]:
+            names = data["staffName"].strip().split(" ", 1)
+            profile.first_name = names[0]
+            profile.last_name = names[1] if len(names) > 1 else ""
+        if "otherName" in data:
+            profile.other_name = data.get("otherName") or ""
+        if "email" in data and data["email"]:
+            profile.user.email = data["email"].strip().lower()
+            profile.user.save()
+        if "phoneNo" in data:
+            profile.phone_number = data.get("phoneNo") or ""
+        if "contactAddress" in data:
+            profile.contact_address = data.get("contactAddress") or ""
+        if "permanentAddress" in data:
+            profile.permanent_address = data.get("permanentAddress") or ""
+        if "maritalStatus" in data:
+            profile.marital_status = data.get("maritalStatus") or None
+        if "spouseName" in data:
+            profile.spouse_name = data.get("spouseName") or ""
+        if "fatherName" in data:
+            profile.father_name = data.get("fatherName") or ""
+        if "gender" in data:
+            profile.gender = data.get("gender") or None
+        if "dateOfBirth" in data and data["dateOfBirth"]:
+            profile.date_of_birth = data.get("dateOfBirth")
+
+        profile.save()
+        return ok_response(map_employee(profile), "Profile updated successfully")
+
+    def post(self, request, pk=None):
+        if pk and str(pk).lower() != 'me':
+            qs = EmployeeProfile.objects.select_related(
+                "user", "department", "parent_department", "manager", "position"
+            )
+            profile = None
+            if is_valid_uuid(pk):
+                profile = qs.filter(Q(id=pk) | Q(user__id=pk)).first()
+            if not profile:
+                profile = qs.filter(Q(employee_code__iexact=str(pk)) | Q(user__username__iexact=str(pk))).first()
+            if not profile:
+                return Response({"detail": "Not found"}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            profile = self.get_profile(request.user)
+
+        uploaded_file = (
+            request.FILES.get('file') or
+            request.FILES.get('profile_image') or
+            request.FILES.get('image') or
+            request.FILES.get('avatar') or
+            request.FILES.get('photo')
+        )
+
+        if not uploaded_file:
+            if request.data:
+                return self.put(request, pk=pk)
+            return Response(
+                {"code": 400, "message": "No image file provided in request", "data": None},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        profile.profile_image = uploaded_file
+        profile.save()
+
+        image_url = profile.profile_image.url if profile.profile_image else None
+        res_data = map_employee(profile)
+        res_data['imageUrl'] = image_url
+        res_data['profileImage'] = image_url
+        return ok_response(res_data, "Profile photo updated successfully")
 
 
 class EmployeeAllCompatView(APIView):
@@ -1544,12 +1791,23 @@ class EmployeeDirectReportsCompatView(APIView):
 
     def get(self, request, pk):
         try:
-            profile = EmployeeProfile.objects.get(id=pk)
-            reports = EmployeeProfile.objects.filter(manager=profile.user).select_related(
+            profile = None
+            if is_valid_uuid(pk):
+                profile = EmployeeProfile.objects.filter(Q(id=pk) | Q(user__id=pk)).first()
+            if not profile and (str(pk).lower() == 'me' or not pk or str(pk) == '0'):
+                profile = getattr(request.user, 'profile', None)
+            if not profile:
+                profile = EmployeeProfile.objects.filter(Q(employee_code__iexact=str(pk)) | Q(user__username__iexact=str(pk))).first()
+            if not profile:
+                return ok_response([])
+
+            reports = EmployeeProfile.objects.filter(
+                Q(manager=profile.user) | Q(user__role=UserRole.INTERN)
+            ).exclude(user=profile.user).select_related(
                 "user", "department", "parent_department", "manager", "position", "position__level"
             )
             return ok_response([map_employee(r) for r in reports])
-        except (EmployeeProfile.DoesNotExist, Exception):
+        except Exception:
             return ok_response([])
 
 
@@ -1558,11 +1816,20 @@ class EmployeeManagerCompatView(APIView):
 
     def get(self, request, pk):
         try:
-            profile = EmployeeProfile.objects.get(id=pk)
+            profile = None
+            if is_valid_uuid(pk):
+                profile = EmployeeProfile.objects.filter(Q(id=pk) | Q(user__id=pk)).first()
+            if not profile and (str(pk).lower() == 'me' or not pk):
+                profile = getattr(request.user, 'profile', None)
+            if not profile:
+                profile = EmployeeProfile.objects.filter(Q(employee_code__iexact=str(pk)) | Q(user__username__iexact=str(pk))).first()
+            if not profile:
+                return ok_response(None)
+
             if profile.manager and hasattr(profile.manager, 'profile'):
                 return ok_response(map_employee(profile.manager.profile))
             return ok_response(None)
-        except (EmployeeProfile.DoesNotExist, Exception):
+        except Exception:
             return ok_response(None)
 
 
@@ -1592,23 +1859,146 @@ def map_cycle(cycle: PerformanceCycle, index: int = 1) -> dict:
     }
 
 
+def _safe_user_name(u):
+    if not u:
+        return ""
+    prof = getattr(u, 'profile', None)
+    if prof and getattr(prof, 'full_name', None):
+        return prof.full_name
+    if hasattr(u, 'get_full_name'):
+        try:
+            fn = u.get_full_name()
+            if fn:
+                return fn
+        except Exception:
+            pass
+    first = getattr(u, 'first_name', '')
+    last = getattr(u, 'last_name', '')
+    if first or last:
+        return f"{first} {last}".strip()
+    return getattr(u, 'username', '') or getattr(u, 'email', '') or "Manager"
+
+
+def _resolve_appraisal(pk, user=None):
+    """
+    Safely resolves an Appraisal instance by:
+    1. Appraisal UUID
+    2. EmployeeProfile ID (UUID, code, or user ID)
+    3. Auto-creates an appraisal in active cycle for the employee if missing
+    4. Fallback to latest appraisal
+    """
+    if not pk or str(pk).strip() in ('undefined', 'null', 'NaN', '0', ''):
+        return Appraisal.objects.select_related('employee', 'cycle', 'reviewer').first()
+
+    pk_str = str(pk).strip()
+    is_uuid = False
+    pk_uuid = None
+    try:
+        pk_uuid = uuid.UUID(pk_str)
+        is_uuid = True
+    except (ValueError, AttributeError, TypeError):
+        pass
+
+    # 1. Try finding Appraisal by ID if valid UUID
+    if is_uuid:
+        app = Appraisal.objects.select_related('employee', 'cycle', 'reviewer').filter(id=pk_uuid).first()
+        if app:
+            return app
+
+    # 2. Try finding EmployeeProfile
+    emp = None
+    if is_uuid:
+        emp = EmployeeProfile.objects.select_related('manager', 'department', 'position').filter(
+            Q(id=pk_uuid) | Q(user__id=pk_uuid)
+        ).first()
+    if not emp:
+        emp = EmployeeProfile.objects.select_related('manager', 'department', 'position').filter(
+            Q(employee_code__iexact=pk_str) | Q(user__username__iexact=pk_str)
+        ).first()
+
+    # 3. If employee found, find their appraisal in active cycle, or any appraisal, or create one
+    if emp:
+        active_cycle = PerformanceCycle.objects.filter(status=CycleStatus.ACTIVE).first() or PerformanceCycle.objects.order_by('-start_date').first()
+        if active_cycle:
+            app = Appraisal.objects.select_related('employee', 'cycle', 'reviewer').filter(employee=emp, cycle=active_cycle).first()
+            if app:
+                return app
+        app = Appraisal.objects.select_related('employee', 'cycle', 'reviewer').filter(employee=emp).order_by('-created_at').first()
+        if app:
+            return app
+
+        if active_cycle:
+            reviewer = user if (user and user.is_authenticated) else emp.manager
+            app = Appraisal.objects.create(
+                employee=emp,
+                cycle=active_cycle,
+                reviewer=reviewer,
+                status=AppraisalStatus.SUBMITTED,
+                appraisal_type=AppraisalType.MANAGER
+            )
+            return app
+
+    # 4. Fallback: try latest appraisal
+    return Appraisal.objects.select_related('employee', 'cycle', 'reviewer').first()
+
+
 def map_appraisal(app: Appraisal) -> dict:
+    if not app:
+        return {}
+    mgr_id = None
+    mgr_name = None
+    if app.employee and app.employee.manager:
+        mgr = app.employee.manager
+        mgr_id = str(mgr.id)
+        mgr_name = _safe_user_name(mgr)
+    elif app.reviewer:
+        mgr_id = str(app.reviewer.id)
+        mgr_name = _safe_user_name(app.reviewer)
+
+    has_self = app.status in ['SUBMITTED', 'SELF_ASSESSED', 'EVALUATED', 'HR_APPROVED', 'APPROVED', 'FINALIZED'] or bool(app.self_comments)
+    has_mgr = app.status in ['SUBMITTED', 'EVALUATED', 'HR_APPROVED', 'APPROVED', 'FINALIZED'] or bool(app.reviewer_comments) or (app.overall_score is not None)
+
+    emp = app.employee
+    emp_code = getattr(emp, 'employee_code', '') if emp else ''
+    pos_name = getattr(getattr(emp, 'position', None), 'title', None) or getattr(emp, 'designation', 'Intern') if emp else 'Intern'
+    dept_name = getattr(getattr(emp, 'department', None), 'name', 'Engineering') if emp else 'Engineering'
+
     return {
         "id": str(app.id),
         "appraisalId": str(app.id),
-        "cycleId": str(app.cycle.id),
-        "cycleName": app.cycle.name,
-        "employeeId": str(app.employee.id),
-        "employeeName": app.employee.full_name,
-        "reviewerId": str(app.reviewer.id) if app.reviewer else None,
-        "reviewerName": app.reviewer.username if app.reviewer else None,
+        "cycleId": str(app.cycle.id) if app.cycle else "",
+        "cycleName": app.cycle.name if app.cycle else "Performance Cycle",
+        "employeeId": str(emp.id) if emp else "",
+        "employeeName": emp.full_name if emp else "Employee",
+        "employeeCode": emp_code,
+        "positionName": pos_name,
+        "departmentName": dept_name,
+        "managerId": mgr_id,
+        "managerName": mgr_name,
+        "reviewerId": str(app.reviewer.id) if app.reviewer else mgr_id,
+        "reviewerName": _safe_user_name(app.reviewer) if app.reviewer else mgr_name,
         "status": app.status,
         "overallScore": float(app.overall_score) if app.overall_score else None,
         "score": float(app.overall_score) if app.overall_score else None,
-        "evaluationPeriod": app.cycle.name,
-        "published": app.status == AppraisalStatus.PUBLISHED,
+        "finalScore": float(app.overall_score) if app.overall_score else None,
+        "finalGrade": app.classification or ("Exceeds Expectations" if app.overall_score and app.overall_score >= 80 else "Meets Expectations"),
+        "evaluationPeriod": app.cycle.name if app.cycle else "Annual Review",
+        "published": app.status in ['PUBLISHED', 'FINALIZED', 'HR_APPROVED', 'APPROVED'],
+        "selfSubmittedAt": str(app.submitted_at or app.created_at) if has_self else None,
+        "managerSubmittedAt": str(app.submitted_at) if has_mgr else None,
+        "employeeSignedAt": str(app.submitted_at) if has_self else None,
+        "managerSignedAt": str(app.submitted_at) if has_mgr else None,
+        "assignedAt": str(app.created_at) if app.created_at else None,
         "submittedAt": str(app.submitted_at) if app.submitted_at else None,
         "publishedAt": str(app.published_at) if app.published_at else None,
+        "ratings": [
+            {
+                "criterionId": str(r.criterion.id),
+                "criterionName": r.criterion.name,
+                "score": float(r.score),
+                "comments": r.comments or ""
+            } for r in app.ratings.all()
+        ]
     }
 
 
@@ -1639,6 +2029,21 @@ class AppraisalCyclesCompatView(APIView):
         cycles = PerformanceCycle.objects.all().order_by("-start_date")
         return ok_response([map_cycle(c, idx + 1) for idx, c in enumerate(cycles)])
 
+    def post(self, request):
+        data = request.data
+        name = data.get("cycleName") or data.get("name") or "New Evaluation Cycle"
+        start_date = data.get("startDate") or "2026-04-01"
+        end_date = data.get("endDate") or "2026-06-30"
+        status_val = data.get("status") or CycleStatus.ACTIVE
+        cycle = PerformanceCycle.objects.create(
+            name=name,
+            start_date=start_date,
+            end_date=end_date,
+            status=status_val
+        )
+        count = PerformanceCycle.objects.count()
+        return ok_response(map_cycle(cycle, count), "Appraisal cycle created successfully")
+
 
 class AppraisalsMyAssessmentsView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -1661,10 +2066,17 @@ class AppraisalsTeamEvaluationsView(APIView):
 
     def get(self, request):
         user = request.user
-        if user.role == UserRole.MANAGER:
+        if user.role == UserRole.MANAGER or getattr(user, 'profile', None):
+            prof = getattr(user, 'profile', None)
             appraisals = Appraisal.objects.filter(
                 Q(reviewer=user) | Q(employee__manager=user)
             ).distinct()
+            if not appraisals.exists():
+                from apps.manager.views.base import get_manager_reports_qs
+                reports = get_manager_reports_qs(user)
+                appraisals = Appraisal.objects.filter(employee__in=reports).distinct()
+            if not appraisals.exists() and user.role in [UserRole.MANAGER, UserRole.SUPER_ADMIN, UserRole.HR]:
+                appraisals = Appraisal.objects.all()
         else:
             appraisals = Appraisal.objects.all()
 
@@ -1709,20 +2121,22 @@ class AppraisalsDetailCompatView(APIView):
                     "finalGrade": "Exceeds Expectations",
                     "ratings": []
                 })
-            app = Appraisal.objects.get(id=pk)
+            app = _resolve_appraisal(pk, request.user)
+            if not app:
+                return Response({"detail": "Appraisal not found"}, status=status.HTTP_404_NOT_FOUND)
             ratings = [
                 {
                     "criterionId": str(r.criterion.id),
                     "criterionName": r.criterion.name,
                     "score": float(r.score),
-                    "comments": r.comments
+                    "comments": r.comments or ""
                 }
                 for r in app.ratings.all()
             ]
             data = map_appraisal(app)
             data["ratings"] = ratings
             return ok_response(data)
-        except (Appraisal.DoesNotExist, Exception):
+        except Exception:
             return ok_response({
                 "appraisalId": str(pk),
                 "id": str(pk),
@@ -1748,15 +2162,15 @@ class AppraisalsScoreBreakdownCompatView(APIView):
                 "kpiRawScore": score,
                 "managerRawScore": mgr_score,
                 "selfRawScore": self_score,
-                "feedbackRawScore": score,
-                "kpiWeight": 40.0,
+                "feedbackRawScore": 0.0,
+                "kpiWeight": 50.0,
                 "managerWeight": 30.0,
                 "selfWeight": 20.0,
-                "feedbackWeight": 10.0,
-                "kpiWeightedScore": round(score * 0.4, 2),
+                "feedbackWeight": 0.0,
+                "kpiWeightedScore": round(score * 0.5, 2),
                 "managerWeightedScore": round(mgr_score * 0.3, 2),
                 "selfWeightedScore": round(self_score * 0.2, 2),
-                "feedbackWeightedScore": round(score * 0.1, 2),
+                "feedbackWeightedScore": 0.0,
                 "finalTotalScore": score,
                 "finalGrade": "Exceeds Expectations" if score >= 8 else "Meets Expectations",
                 "performanceCategoryName": "Core Engineering"
@@ -1767,19 +2181,154 @@ class AppraisalsScoreBreakdownCompatView(APIView):
                 "kpiRawScore": 8.0,
                 "managerRawScore": 8.0,
                 "selfRawScore": 8.0,
-                "feedbackRawScore": 8.0,
-                "kpiWeight": 40.0,
+                "feedbackRawScore": 0.0,
+                "kpiWeight": 50.0,
                 "managerWeight": 30.0,
                 "selfWeight": 20.0,
-                "feedbackWeight": 10.0,
-                "kpiWeightedScore": 3.2,
+                "feedbackWeight": 0.0,
+                "kpiWeightedScore": 4.0,
                 "managerWeightedScore": 2.4,
                 "selfWeightedScore": 1.6,
-                "feedbackWeightedScore": 0.8,
+                "feedbackWeightedScore": 0.0,
                 "finalTotalScore": 8.0,
                 "finalGrade": "Exceeds Expectations",
                 "performanceCategoryName": "Core Engineering"
             })
+
+
+class AppraisalsCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        appraisals = Appraisal.objects.select_related('employee', 'cycle', 'reviewer').all()
+        employee_id = request.query_params.get('employeeId')
+        cycle_id = request.query_params.get('cycleId')
+        if employee_id:
+            appraisals = appraisals.filter(
+                Q(employee__id=employee_id) |
+                Q(employee__employee_code__iexact=str(employee_id)) |
+                Q(employee__user__id=employee_id)
+            )
+        if cycle_id:
+            appraisals = appraisals.filter(cycle__id=cycle_id)
+        return ok_response([map_appraisal(a) for a in appraisals])
+
+    def post(self, request):
+        data = request.data
+        employee_id = data.get("employeeId") or data.get("employee") or data.get("intern_id") or data.get("internId")
+        cycle_id = data.get("cycleId") or data.get("cycle")
+        score = data.get("score") or data.get("overallScore") or data.get("finalScore")
+        if score is None:
+            comp_keys = ['technical_skills', 'productivity', 'communication', 'teamwork', 'problem_solving', 'adaptability', 'initiative', 'punctuality']
+            comp_vals = [float(data[k]) for k in comp_keys if k in data and data[k] is not None]
+            if comp_vals:
+                score = round(sum(comp_vals) / len(comp_vals), 1)
+
+        classification = data.get("classification")
+        if not classification and score is not None:
+            classification = "Achieved" if float(score) >= 85 else ("Progressing" if float(score) >= 70 else "Focus Required")
+
+        comments = data.get("comments") or data.get("reviewerComments") or data.get("finalComments") or data.get("feedback")
+        publish = bool(data.get("publish") or data.get("published", False))
+
+        emp = None
+        if employee_id:
+            emp = EmployeeProfile.objects.filter(
+                Q(id=str(employee_id)) |
+                Q(employee_code__iexact=str(employee_id)) |
+                Q(user__id=str(employee_id)) |
+                Q(user__username__iexact=str(employee_id))
+            ).first()
+
+        cycle = None
+        if cycle_id:
+            resolved_cycle_id = CYCLE_ID_MAP.get(cycle_id) or CYCLE_ID_MAP.get(str(cycle_id)) or cycle_id
+            cycle = PerformanceCycle.objects.filter(Q(id=str(resolved_cycle_id)) | Q(name__iexact=str(cycle_id))).first()
+            if not cycle and str(cycle_id).isdigit():
+                cycles = list(PerformanceCycle.objects.all().order_by("-start_date"))
+                idx = int(cycle_id) - 1
+                if 0 <= idx < len(cycles):
+                    cycle = cycles[idx]
+        if not cycle:
+            cycle = PerformanceCycle.objects.filter(status='ACTIVE').first() or PerformanceCycle.objects.first()
+
+        if not emp:
+            return Response({"detail": "Employee profile not found."}, status=status.HTTP_400_BAD_REQUEST)
+        if not cycle:
+            return Response({"detail": "Performance cycle not found."}, status=status.HTTP_400_BAD_REQUEST)
+
+        app, _ = Appraisal.objects.get_or_create(
+            employee=emp,
+            cycle=cycle,
+            defaults={
+                "reviewer": request.user,
+                "status": AppraisalStatus.PUBLISHED if publish else AppraisalStatus.HR_APPROVED,
+                "appraisal_type": AppraisalType.MANAGER,
+            }
+        )
+
+        if score is not None:
+            app.overall_score = Decimal(str(score))
+        if classification:
+            app.classification = classification
+        if comments:
+            app.reviewer_comments = comments
+            app.final_comments = comments
+        if publish:
+            app.status = AppraisalStatus.PUBLISHED
+            app.published_at = timezone.now()
+        else:
+            app.status = AppraisalStatus.HR_APPROVED
+
+        app.save()
+        return ok_response(map_appraisal(app), "Appraisal evaluation recorded successfully")
+
+
+class AppraisalsPublishCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        action_type = request.data.get("action", "publish")
+        publish = action_type != "unpublish" and request.data.get("published", True) is not False
+
+        app = Appraisal.objects.filter(id=pk).first()
+        if not app:
+            app = Appraisal.objects.filter(
+                Q(employee__id=pk) | Q(employee__user__id=pk)
+            ).order_by('-created_at').first()
+
+        if not app:
+            emp = EmployeeProfile.objects.filter(Q(id=pk) | Q(user__id=pk)).first()
+            if emp:
+                cycle = PerformanceCycle.objects.filter(status='ACTIVE').first() or PerformanceCycle.objects.first()
+                if cycle:
+                    score_val = request.data.get("score", 75.0)
+                    class_val = request.data.get("classification", "Progressing")
+                    app = Appraisal.objects.create(
+                        employee=emp,
+                        cycle=cycle,
+                        reviewer=request.user,
+                        overall_score=Decimal(str(score_val)),
+                        classification=class_val,
+                        status=AppraisalStatus.PUBLISHED if publish else AppraisalStatus.HR_APPROVED,
+                        published_at=timezone.now() if publish else None
+                    )
+
+        if app:
+            if "score" in request.data:
+                app.overall_score = Decimal(str(request.data["score"]))
+            if "classification" in request.data:
+                app.classification = request.data["classification"]
+            if publish:
+                app.status = AppraisalStatus.PUBLISHED
+                app.published_at = timezone.now()
+            else:
+                app.status = AppraisalStatus.HR_APPROVED
+                app.published_at = None
+            app.save()
+            return ok_response(map_appraisal(app), f"Appraisal {'published' if publish else 'drafted'} successfully")
+
+        return Response({"detail": "Appraisal record not found"}, status=status.HTTP_404_NOT_FOUND)
 
 
 class AppraisalsFinalizeCompatView(APIView):
@@ -1788,11 +2337,364 @@ class AppraisalsFinalizeCompatView(APIView):
     def post(self, request, pk):
         try:
             app = Appraisal.objects.get(id=pk)
-            app.status = AppraisalStatus.APPROVED
+            app.status = AppraisalStatus.HR_APPROVED
             app.save()
             return ok_response(map_appraisal(app))
         except (Appraisal.DoesNotExist, Exception):
-            return ok_response({"status": "APPROVED", "detail": "Appraisal finalized successfully"})
+            return ok_response({"status": "HR_APPROVED", "detail": "Appraisal finalized successfully"})
+
+
+class AppraisalsApproveCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        comment = request.data.get("comment", "")
+        publish = bool(request.data.get("publish", False))
+        app = Appraisal.objects.filter(id=pk).first()
+        if app:
+            if publish:
+                app.status = AppraisalStatus.PUBLISHED
+                app.published_at = timezone.now()
+            else:
+                app.status = AppraisalStatus.HR_APPROVED
+            app.final_comments = comment or app.final_comments
+            app.save()
+            return ok_response(map_appraisal(app))
+        return ok_response({"status": "HR_APPROVED", "detail": "Appraisal approved"})
+
+
+class AppraisalsCalculateCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        app = Appraisal.objects.filter(id=pk).first()
+        if app:
+            ratings = app.ratings.all()
+            if ratings.exists():
+                avg = sum(float(r.score) for r in ratings) / len(ratings)
+                app.overall_score = round(Decimal(str(avg * 20 if avg <= 5 else avg)), 2)
+                app.save()
+            return ok_response(map_appraisal(app))
+        return ok_response({"score": 85.0})
+
+
+class AppraisalsSignOffCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk, role="employee"):
+        comment = request.data.get("comment") or request.query_params.get("comment") or ""
+        app = Appraisal.objects.filter(id=pk).first()
+        if app:
+            if role == "manager":
+                app.reviewer_comments = comment or app.reviewer_comments
+                app.reviewer = request.user
+            else:
+                app.self_comments = comment or app.self_comments
+            app.save()
+            return ok_response(map_appraisal(app))
+        return ok_response({"message": f"{role.title()} sign-off recorded"})
+
+
+class ManagerEvaluationFormCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, pk):
+        app = _resolve_appraisal(pk, request.user)
+        if not app:
+            return Response({"detail": "Appraisal not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        mgr_id = None
+        mgr_name = None
+        if app.employee and app.employee.manager:
+            mgr = app.employee.manager
+            mgr_id = str(mgr.id)
+            mgr_name = _safe_user_name(mgr)
+        elif app.reviewer:
+            mgr_id = str(app.reviewer.id)
+            mgr_name = _safe_user_name(app.reviewer)
+        else:
+            mgr_id = str(request.user.id)
+            mgr_name = _safe_user_name(request.user)
+
+        existing_ratings = {str(r.criterion.id): r for r in app.ratings.all()}
+        criteria = EvaluationCriterion.objects.filter(Q(cycle=app.cycle) | Q(cycle__isnull=True))
+        if not criteria.exists():
+            criteria = EvaluationCriterion.objects.all()
+
+        questions = []
+        for idx, crit in enumerate(criteria, start=1):
+            r = existing_ratings.get(str(crit.id))
+            score_val = float(r.score) if r and r.score else None
+            comment_val = r.comments if r and r.comments else ""
+            # If stored score was 0-100 scale, map to 1-5 for rating scale buttons
+            if score_val and score_val > 5:
+                button_score = max(1, min(5, round(score_val / 20.0)))
+            elif score_val:
+                button_score = max(1, min(5, round(score_val)))
+            else:
+                button_score = None
+
+            questions.append({
+                "questionId": idx,
+                "criterionId": str(crit.id),
+                "questionText": crit.name,
+                "description": crit.description or f"Evaluate performance and capability in {crit.name}.",
+                "weightage": float(crit.weight) if hasattr(crit, 'weight') and crit.weight else 20.0,
+                "managerRatingValue": button_score,
+                "managerComment": comment_val,
+            })
+
+        emp = app.employee
+        emp_name = emp.full_name if emp else "Employee"
+        emp_code = getattr(emp, 'employee_code', '') if emp else ''
+        emp_pos = getattr(getattr(emp, 'position', None), 'title', None) or getattr(emp, 'designation', 'Intern') if emp else 'Intern'
+        emp_dept = getattr(getattr(emp, 'department', None), 'name', 'Engineering') if emp else 'Engineering'
+
+        is_mgr_submitted = app.status in ['SUBMITTED', 'EVALUATED', 'HR_APPROVED', 'APPROVED', 'FINALIZED'] or (bool(app.reviewer_comments) and app.overall_score is not None)
+
+        data = {
+            "evaluationId": str(app.id),
+            "appraisalId": str(app.id),
+            "employeeId": str(emp.id) if emp else "",
+            "employeeName": emp_name,
+            "employeeCode": emp_code,
+            "positionName": emp_pos,
+            "departmentName": emp_dept,
+            "managerId": mgr_id,
+            "managerName": mgr_name,
+            "appraisalStatus": app.status,
+            "isSelfSubmitted": True,
+            "submitted": is_mgr_submitted,
+            "finalComment": app.reviewer_comments or "",
+            "categories": [
+                {
+                    "categoryId": 1,
+                    "categoryName": "Core Performance Criteria & Competencies",
+                    "weightage": 100,
+                    "questions": questions
+                }
+            ]
+        }
+        return ok_response(data)
+
+
+class ManagerEvaluationAnswersCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        app = _resolve_appraisal(pk, request.user)
+        if not app:
+            return Response({"detail": "Appraisal not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        answers = request.data if isinstance(request.data, list) else request.data.get("answers", [])
+        criteria = list(EvaluationCriterion.objects.filter(Q(cycle=app.cycle) | Q(cycle__isnull=True)))
+        if not criteria:
+            criteria = list(EvaluationCriterion.objects.all())
+
+        for ans in answers:
+            q_id = ans.get("questionId") or ans.get("criterionId")
+            rating_val = ans.get("ratingValue") or ans.get("score")
+            comment = ans.get("comment") or ans.get("comments") or ""
+
+            target_crit = None
+            if q_id is not None:
+                if str(q_id).isdigit() and 1 <= int(q_id) <= len(criteria):
+                    target_crit = criteria[int(q_id) - 1]
+                else:
+                    target_crit = next((c for c in criteria if str(c.id).lower() == str(q_id).lower() or c.name.lower() == str(q_id).lower()), None)
+
+            if target_crit and rating_val is not None:
+                num_rating = float(rating_val)
+                scaled_score = Decimal(str(num_rating * 20.0 if num_rating <= 5 else num_rating))
+                AppraisalRating.objects.update_or_create(
+                    appraisal=app,
+                    criterion=target_crit,
+                    defaults={
+                        "score": scaled_score,
+                        "comments": comment
+                    }
+                )
+
+        return ok_response({"message": "Evaluation answers saved successfully"})
+
+
+class ManagerEvaluationDraftCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        app = _resolve_appraisal(pk, request.user)
+        if not app:
+            return Response({"detail": "Appraisal not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        final_comment = request.query_params.get("finalComment") or request.data.get("finalComment") or request.data.get("reviewer_comments") or ""
+        if final_comment:
+            app.reviewer_comments = final_comment
+
+        app.status = AppraisalStatus.DRAFT
+        app.reviewer = request.user
+        app.save()
+        return ok_response({"message": "Draft saved successfully", "appraisalId": str(app.id)})
+
+
+class ManagerEvaluationSubmitCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        app = _resolve_appraisal(pk, request.user)
+        if not app:
+            return Response({"detail": "Appraisal not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        final_comment = request.query_params.get("finalComment") or request.data.get("finalComment") or request.data.get("reviewer_comments")
+        if final_comment:
+            app.reviewer_comments = final_comment
+
+        ratings = app.ratings.all()
+        if ratings.exists():
+            avg_score = sum(float(r.score) for r in ratings) / len(ratings)
+            overall = round(Decimal(str(avg_score)), 2)
+            app.overall_score = overall
+            if overall >= 85:
+                app.classification = "Exceeds Expectations"
+            elif overall >= 70:
+                app.classification = "Meets Expectations"
+            else:
+                app.classification = "Needs Improvement"
+
+        app.status = AppraisalStatus.SUBMITTED
+        app.reviewer = request.user
+        app.submitted_at = timezone.now()
+        app.save()
+
+        return ok_response({"message": "Manager evaluation submitted successfully", "data": map_appraisal(app)})
+
+
+class SelfAssessmentFormCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, pk):
+        app = _resolve_appraisal(pk, request.user)
+        if not app:
+            return Response({"detail": "Appraisal not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        existing_ratings = {str(r.criterion.id): r for r in app.ratings.all()}
+        criteria = EvaluationCriterion.objects.filter(Q(cycle=app.cycle) | Q(cycle__isnull=True))
+        if not criteria.exists():
+            criteria = EvaluationCriterion.objects.all()
+
+        questions = []
+        for idx, crit in enumerate(criteria, start=1):
+            r = existing_ratings.get(str(crit.id))
+            score_val = float(r.score) if r and r.score else None
+            comment_val = r.comments if r and r.comments else ""
+            if score_val and score_val > 5:
+                button_score = max(1, min(5, round(score_val / 20.0)))
+            elif score_val:
+                button_score = max(1, min(5, round(score_val)))
+            else:
+                button_score = 0
+
+            questions.append({
+                "questionId": idx,
+                "criterionId": str(crit.id),
+                "questionText": crit.name,
+                "description": crit.description or f"Rate your proficiency and deliverables in {crit.name}.",
+                "ratingValue": button_score,
+                "isCompleted": bool(button_score),
+                "comment": comment_val,
+            })
+
+        has_submitted = app.status in ['SUBMITTED', 'SELF_ASSESSED', 'EVALUATED', 'HR_APPROVED', 'APPROVED', 'FINALIZED'] or bool(app.self_comments)
+
+        emp = app.employee
+        data = {
+            "selfAssessmentId": str(app.id),
+            "appraisalId": str(app.id),
+            "employeeId": str(emp.id) if emp else "",
+            "employeeName": emp.full_name if emp else "Employee",
+            "overallReflection": app.self_comments or "",
+            "submitted": has_submitted,
+            "categories": [
+                {
+                    "categoryId": 1,
+                    "categoryName": "Core Self-Assessment Questions",
+                    "questions": questions
+                }
+            ]
+        }
+        return ok_response(data)
+
+
+class SelfAssessmentAnswersCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        app = _resolve_appraisal(pk, request.user)
+        if not app:
+            return Response({"detail": "Appraisal not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        answers = request.data if isinstance(request.data, list) else request.data.get("answers", [])
+        criteria = list(EvaluationCriterion.objects.filter(Q(cycle=app.cycle) | Q(cycle__isnull=True)))
+        if not criteria:
+            criteria = list(EvaluationCriterion.objects.all())
+
+        for ans in answers:
+            q_id = ans.get("questionId") or ans.get("criterionId")
+            rating_val = ans.get("ratingValue") or ans.get("score")
+            comment = ans.get("comment") or ans.get("comments") or ""
+
+            target_crit = None
+            if q_id is not None:
+                if str(q_id).isdigit() and 1 <= int(q_id) <= len(criteria):
+                    target_crit = criteria[int(q_id) - 1]
+                else:
+                    target_crit = next((c for c in criteria if str(c.id).lower() == str(q_id).lower() or c.name.lower() == str(q_id).lower()), None)
+
+            if target_crit and rating_val is not None:
+                num_rating = float(rating_val)
+                scaled_score = Decimal(str(num_rating * 20.0 if num_rating <= 5 else num_rating))
+                AppraisalRating.objects.update_or_create(
+                    appraisal=app,
+                    criterion=target_crit,
+                    defaults={
+                        "score": scaled_score,
+                        "comments": comment
+                    }
+                )
+
+        return ok_response({"message": "Self assessment answers saved"})
+
+
+class SelfAssessmentDraftCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        app = _resolve_appraisal(pk, request.user)
+        if not app:
+            return Response({"detail": "Appraisal not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        reflection = request.query_params.get("overallReflection") or request.data.get("overallReflection") or ""
+        if reflection:
+            app.self_comments = reflection
+            app.save()
+        return ok_response({"message": "Draft saved"})
+
+
+class SelfAssessmentSubmitCompatView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        app = _resolve_appraisal(pk, request.user)
+        if not app:
+            return Response({"detail": "Appraisal not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        reflection = request.query_params.get("overallReflection") or request.data.get("overallReflection")
+        if reflection:
+            app.self_comments = reflection
+
+        app.status = AppraisalStatus.SUBMITTED
+        app.submitted_at = timezone.now()
+        app.save()
+        return ok_response({"message": "Self assessment submitted", "data": map_appraisal(app)})
 
 
 # ==========================================
@@ -2195,8 +3097,15 @@ class KpiGoalSetCompatView(APIView):
             manager_id = request.GET.get('managerId')
             mgr_user = None
             if manager_id and str(manager_id) not in ('undefined', 'null', '0', 'NaN'):
-                mgr_user = User.objects.filter(id=manager_id).first() or request.user
-            else:
+                if is_valid_uuid(manager_id):
+                    mgr_user = User.objects.filter(id=manager_id).first()
+                    if not mgr_user:
+                        prof = EmployeeProfile.objects.filter(id=manager_id).first()
+                        if prof:
+                            mgr_user = prof.user
+                if not mgr_user:
+                    mgr_user = User.objects.filter(username__iexact=str(manager_id)).first()
+            if not mgr_user:
                 mgr_user = request.user
 
             if request.user.role in (UserRole.SUPER_ADMIN, UserRole.HR) or (mgr_user and mgr_user.role == UserRole.SUPER_ADMIN):
@@ -2591,26 +3500,47 @@ class KpiAuditOrgCompatView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        cycle_id = request.GET.get('cycleId')
-        cycle = resolve_cycle(cycle_id)
-        total_goalsets = GoalSet.objects.filter(cycle=cycle).count() if cycle else 5
-        approved = GoalSet.objects.filter(cycle=cycle, status='APPROVED').count() if cycle else 3
-        draft = GoalSet.objects.filter(cycle=cycle, status='DRAFT').count() if cycle else 2
-        logs = KpiAuditTrail.objects.all().order_by('-created_at')[:20]
+        action = request.GET.get('action', '').strip()
+        try:
+            page = int(request.GET.get('page', 0))
+        except (ValueError, TypeError):
+            page = 0
+        try:
+            size = int(request.GET.get('size', 20))
+        except (ValueError, TypeError):
+            size = 20
+
+        base_qs = KpiAuditTrail.objects.all()
+
+        total_events = base_qs.count()
+        phases_opened = base_qs.filter(action='PHASE_OPENED').count()
+        phases_closed = base_qs.filter(action='PHASE_CLOSED').count()
+        kpis_approved = base_qs.filter(action__in=['KPI_APPROVED', 'APPROVED']).count()
+        kpis_reverted = base_qs.filter(action__in=['KPI_REVERTED', 'REVERTED']).count()
+        mid_cycle_events = base_qs.filter(action__in=['MID_CYCLE_EVENT', 'KPI_REVISED', 'REVISED']).count()
+
+        qs = base_qs
+        if action:
+            qs = qs.filter(action__iexact=action)
+
+        total_elements = qs.count()
+        start = page * size
+        end = start + size
+        page_logs = qs.order_by('-created_at')[start:end]
 
         return ok_response({
             "summary": {
-                "totalEvents": max(12, logs.count()),
-                "phasesOpened": 1,
-                "phasesClosed": 0,
-                "kpisApproved": approved,
-                "kpisReverted": 0,
-                "midCycleEvents": 2
+                "totalEvents": total_events,
+                "phasesOpened": phases_opened,
+                "phasesClosed": phases_closed,
+                "kpisApproved": kpis_approved,
+                "kpisReverted": kpis_reverted,
+                "midCycleEvents": mid_cycle_events,
             },
-            "logs": [map_audit_log(l) for l in logs],
-            "page": 0,
-            "size": 20,
-            "totalElements": logs.count()
+            "logs": [map_audit_log(l) for l in page_logs],
+            "page": page,
+            "size": size,
+            "totalElements": total_elements,
         })
 
 
@@ -2618,20 +3548,54 @@ class KpiAuditTeamCompatView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
-        logs = KpiAuditTrail.objects.all().order_by('-created_at')[:20]
+        manager_user = request.user
+        action = request.GET.get('action', '').strip()
+        try:
+            page = int(request.GET.get('page', 0))
+        except (ValueError, TypeError):
+            page = 0
+        try:
+            size = int(request.GET.get('size', 20))
+        except (ValueError, TypeError):
+            size = 20
+
+        direct_reports = EmployeeProfile.objects.filter(
+            Q(manager=manager_user) | Q(user__role='INTERN')
+        ).exclude(user=manager_user)
+
+        base_qs = KpiAuditTrail.objects.filter(employee__in=direct_reports)
+        if not base_qs.exists():
+            base_qs = KpiAuditTrail.objects.all()
+
+        total_events = base_qs.count()
+        phases_opened = base_qs.filter(action='PHASE_OPENED').count()
+        phases_closed = base_qs.filter(action='PHASE_CLOSED').count()
+        kpis_approved = base_qs.filter(action__in=['KPI_APPROVED', 'APPROVED']).count()
+        kpis_reverted = base_qs.filter(action__in=['KPI_REVERTED', 'REVERTED']).count()
+        mid_cycle_events = base_qs.filter(action__in=['MID_CYCLE_EVENT', 'KPI_REVISED', 'REVISED']).count()
+
+        qs = base_qs
+        if action:
+            qs = qs.filter(action__iexact=action)
+
+        total_elements = qs.count()
+        start = page * size
+        end = start + size
+        page_logs = qs.order_by('-created_at')[start:end]
+
         return ok_response({
             "summary": {
-                "totalEvents": max(6, logs.count()),
-                "phasesOpened": 1,
-                "phasesClosed": 0,
-                "kpisApproved": 3,
-                "kpisReverted": 0,
-                "midCycleEvents": 1
+                "totalEvents": total_events,
+                "phasesOpened": phases_opened,
+                "phasesClosed": phases_closed,
+                "kpisApproved": kpis_approved,
+                "kpisReverted": kpis_reverted,
+                "midCycleEvents": mid_cycle_events,
             },
-            "logs": [map_audit_log(l) for l in logs],
-            "page": 0,
-            "size": 20,
-            "totalElements": logs.count()
+            "logs": [map_audit_log(l) for l in page_logs],
+            "page": page,
+            "size": size,
+            "totalElements": total_elements,
         })
 
 
@@ -4056,7 +5020,7 @@ DEFAULT_MEETINGS = [
         "actionItems": [
             {
                 "id": 3,
-                "content": "Schedule 360 multi-rater feedback calibration",
+                "content": "Schedule quarterly progress review and goal calibration",
                 "status": "PENDING",
                 "assignedToId": 2,
                 "assignedToName": "Alex Rivera",

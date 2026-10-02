@@ -294,7 +294,7 @@ const SECTIONS = ['Engineering', 'Product & Design', 'QA & Testing', 'Operations
 // ----------------------------------------------------
 
 const HrDashboard: React.FC = () => {
-  const { user } = useAuth();
+  const { user, accessToken } = useAuth();
   const hrName =
     (user?.staffName && !["administrator", "admin", "superadmin"].includes(user.staffName.toLowerCase()))
       ? user.staffName
@@ -394,22 +394,124 @@ const HrDashboard: React.FC = () => {
   const [gradeCommunication, setGradeCommunication] = useState(4.0);
   const [gradeAdaptability, setGradeAdaptability] = useState(4.0);
 
+  // Helper for authenticated requests
+  const authFetch = async (url: string, options: RequestInit = {}) => {
+    const headers = new Headers(options.headers || {});
+    headers.set('ngrok-skip-browser-warning', 'true');
+    const token = accessToken || localStorage.getItem('token') || '';
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+    if (!headers.has('Content-Type') && !(options.body instanceof FormData)) {
+      headers.set('Content-Type', 'application/json');
+    }
+    return fetch(url, { ...options, headers });
+  };
+
   // Backend Sync on mount
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/appraisals/', {
-      headers: { 'ngrok-skip-browser-warning': 'true' }
-    })
+    // 1. Fetch Real Employees & Mentors from Database
+    authFetch('/emp/all')
       .then(res => res.json())
       .then(json => {
-        if (json.data && Array.isArray(json.data) && json.data.length > 0) {
+        const empList = json.data || (Array.isArray(json) ? json : []);
+        if (Array.isArray(empList) && empList.length > 0) {
+          // Identify Mentors
+          const rawMentors = empList.filter((e: any) => 
+            (e.roles && e.roles.includes('MANAGER')) ||
+            (e.positionName && e.positionName.toLowerCase().includes('manager')) ||
+            ['marcus', 'elena', 'sarah', 'other_mgr'].some(k => (e.staffName || '').toLowerCase().includes(k))
+          );
+          
+          const mappedMentors: Mentor[] = rawMentors.map((m: any) => {
+            const mentees = empList.filter((e: any) => 
+              e.directManagerId === m.id || 
+              (e.directManagerName && e.directManagerName.toLowerCase() === m.staffName.toLowerCase())
+            );
+            return {
+              id: String(m.id),
+              name: m.staffName,
+              email: m.email,
+              department: m.currentDepartmentName || 'Engineering',
+              specialization: m.positionName || 'Technical Mentor',
+              menteeCount: mentees.length,
+              maxCapacity: 4
+            };
+          });
+          if (mappedMentors.length > 0) {
+            setMentors(mappedMentors);
+          }
+
+          // Map Interns (all employees who are interns)
+          const rawInterns = empList.filter((e: any) => 
+            !e.roles || e.roles.includes('INTERN') || (e.levelName && e.levelName.includes('INTERN')) || !rawMentors.some(m => m.id === e.id)
+          );
+
+          if (rawInterns.length > 0) {
+            const mappedInterns: Intern[] = rawInterns.map((emp: any) => {
+              let bName = 'Batch A';
+              if (emp.currentDepartmentName && BATCHES.includes(emp.currentDepartmentName)) {
+                bName = emp.currentDepartmentName;
+              } else if (emp.currentDepartmentName && emp.currentDepartmentName.includes('Batch')) {
+                bName = emp.currentDepartmentName;
+              } else if (emp.employeeCode) {
+                if (emp.employeeCode.includes('AA') || emp.employeeCode.includes('A1') || emp.employeeCode.includes('A2')) bName = 'Batch A';
+                else if (emp.employeeCode.includes('BB') || emp.employeeCode.includes('B1') || emp.employeeCode.includes('B2')) bName = 'Batch B';
+                else if (emp.employeeCode.includes('CC') || emp.employeeCode.includes('C1') || emp.employeeCode.includes('C2')) bName = 'Batch C';
+                else if (emp.employeeCode.includes('DD') || emp.employeeCode.includes('D1') || emp.employeeCode.includes('D2')) bName = 'Batch D';
+              }
+
+              let sbName = 'A1';
+              const match = (emp.positionName || emp.employeeCode || '').match(/([ABCD][12])/i);
+              if (match) {
+                sbName = match[1].toUpperCase();
+              } else {
+                sbName = SUB_BATCH_MAP[bName]?.[0] || 'A1';
+              }
+
+              return {
+                id: String(emp.id),
+                name: emp.staffName,
+                email: emp.email,
+                code: emp.employeeCode || '',
+                cohort: emp.parentDepartmentName || 'MIRAI Cohort 1',
+                batch: bName,
+                subBatch: sbName,
+                section: emp.currentDepartmentName || 'Engineering',
+                subSection: 'Core',
+                mentor: emp.directManagerName || 'Unassigned',
+                evaluator: emp.directManagerName || 'Unassigned',
+                score: 75.0,
+                classification: 'Progressing',
+                status: (emp.status === 'ACTIVE' || emp.isActive !== false) ? 'ACTIVE' : 'DEACTIVATED',
+                published: false,
+                joiningDate: emp.dateOfAppointment || '2025-06-01'
+              };
+            });
+            setInterns(mappedInterns);
+          }
+        }
+      })
+      .catch(() => {});
+
+    // 2. Fetch Appraisals to merge live scores & publish states
+    authFetch('/appraisals/')
+      .then(res => res.json())
+      .then(json => {
+        const appList = json.data || (Array.isArray(json) ? json : []);
+        if (Array.isArray(appList) && appList.length > 0) {
           setInterns(prev => {
             const updated = [...prev];
-            json.data.forEach((app: any) => {
-              const idx = updated.findIndex(i => i.name.toLowerCase() === (app.employeeName || '').toLowerCase());
+            appList.forEach((app: any) => {
+              const idx = updated.findIndex(i => 
+                String(i.id) === String(app.employeeId) || 
+                i.name.toLowerCase() === (app.employeeName || '').toLowerCase()
+              );
               if (idx >= 0) {
-                updated[idx].score = app.overallScore || updated[idx].score;
+                const s = parseFloat(app.overallScore || app.finalScore || updated[idx].score);
+                updated[idx].score = isNaN(s) ? updated[idx].score : s;
                 updated[idx].published = app.status === 'PUBLISHED';
-                updated[idx].classification = (app.overallScore >= 85 ? 'Achieved' : app.overallScore >= 70 ? 'Progressing' : 'Focus Required') as any;
+                updated[idx].classification = (app.classification || (s >= 85 ? 'Achieved' : s >= 70 ? 'Progressing' : 'Focus Required')) as any;
               }
             });
             return updated;
@@ -417,7 +519,106 @@ const HrDashboard: React.FC = () => {
         }
       })
       .catch(() => {});
-  }, []);
+
+    // 3. Fetch Evaluation Cycles
+    authFetch('/appraisal-cycles')
+      .then(res => res.json())
+      .then(json => {
+        const cycleList = json.data || (Array.isArray(json) ? json : []);
+        if (Array.isArray(cycleList) && cycleList.length > 0) {
+          const mappedCycles: EvaluationCycle[] = cycleList.map((cy: any) => ({
+            id: String(cy.uuid || cy.id || cy.cycleId),
+            name: cy.cycleName || cy.name,
+            quarter: cy.evaluationPeriod || 'Q2 2026',
+            startDate: cy.startDate || '2026-04-01',
+            endDate: cy.endDate || '2026-06-30',
+            status: (cy.status === 'ACTIVE' || cy.isActive) ? 'ACTIVE' : (cy.status === 'PUBLISHED' ? 'PUBLISHED' : 'DRAFT')
+          }));
+          setCycles(mappedCycles);
+        }
+      })
+      .catch(() => {});
+
+    // 4. Fetch Goals
+    authFetch('/api/goals/')
+      .then(res => res.json())
+      .then(json => {
+        const goalList = json.results || json.data || (Array.isArray(json) ? json : []);
+        if (Array.isArray(goalList) && goalList.length > 0) {
+          const mappedGoals: Goal[] = goalList.map((g: any) => ({
+            id: String(g.id),
+            internName: g.employee_name || 'Intern',
+            title: g.title,
+            category: g.description || 'Technical Goal',
+            section: 'Engineering',
+            dueDate: g.due_date || '2026-03-31',
+            progress: Math.round(parseFloat(g.completion_percentage || 0)),
+            status: g.status === 'COMPLETED' ? 'Completed' : (g.status === 'IN_PROGRESS' ? 'In Progress' : 'Not Started')
+          }));
+          setGoals(mappedGoals);
+        }
+      })
+      .catch(() => {});
+
+    // 5. Fetch Evidence
+    authFetch('/api/evidence/')
+      .then(res => res.json())
+      .then(json => {
+        const evList = json.results || json.data || (Array.isArray(json) ? json : []);
+        if (Array.isArray(evList) && evList.length > 0) {
+          const mappedEv: Evidence[] = evList.map((ev: any) => ({
+            id: String(ev.id),
+            internName: ev.employee_name || 'Intern',
+            title: ev.title,
+            goalTitle: ev.goal_title || 'Project Goal',
+            link: ev.external_url || '#',
+            type: 'GitHub PR',
+            status: ev.review_status === 'APPROVED' ? 'APPROVED' : (ev.review_status === 'REJECTED' ? 'NEEDS_CHANGES' : 'PENDING'),
+            note: ev.review_notes || ''
+          }));
+          setEvidenceList(mappedEv);
+        }
+      })
+      .catch(() => {});
+
+    // 6. Fetch Feedback
+    authFetch('/api/feedback/')
+      .then(res => res.json())
+      .then(json => {
+        const fbList = json.results || json.data || (Array.isArray(json) ? json : []);
+        if (Array.isArray(fbList) && fbList.length > 0) {
+          const mappedFb: Feedback[] = fbList.map((fb: any) => ({
+            id: String(fb.id),
+            fromName: fb.sender_name || 'HR Admin',
+            fromRole: 'HR Admin',
+            toName: fb.recipient_name || 'Intern',
+            type: fb.feedback_type === 'PRAISE' ? 'PRAISE' : 'SUGGESTION',
+            message: fb.message,
+            date: fb.created_at ? new Date(fb.created_at).toISOString().split('T')[0] : 'Today'
+          }));
+          setFeedbackList(mappedFb);
+        }
+      })
+      .catch(() => {});
+
+    // 7. Fetch Criteria Questions
+    authFetch('/api/hr/criteria/')
+      .then(res => res.json())
+      .then(json => {
+        const critList = json.data || (Array.isArray(json) ? json : []);
+        if (Array.isArray(critList) && critList.length > 0) {
+          const mappedQuestions: Question[] = critList.map((q: any) => ({
+            id: String(q.id),
+            section: 'Technical Capability (60%)',
+            question: q.name + (q.description ? `: ${q.description}` : ''),
+            type: 'Rating (1 to 5)',
+            weight: Math.round(parseFloat(q.weightage || q.weight || 20))
+          }));
+          setQuestions(mappedQuestions);
+        }
+      })
+      .catch(() => {});
+  }, [accessToken]);
 
   // Simple Helper to record audit log
   const addAudit = (action: string, details: string) => {
@@ -464,46 +665,82 @@ const HrDashboard: React.FC = () => {
   // ----------------------------------------------------
 
   // 1. Add Intern
-  const handleAddIntern = (e: React.FormEvent) => {
+  const handleAddIntern = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newInternName) return;
-    const newI: Intern = {
-      id: `emp-${Date.now()}`,
-      name: newInternName,
-      email: newInternEmail || `${newInternName.toLowerCase().replace(/\s+/g, '')}@college.edu`,
-      cohort: newInternCohort,
-      batch: newInternBatch,
-      subBatch: newInternSubBatch,
-      section: 'MIRAI',
-      subSection: 'Core',
-      mentor: newInternMentor,
-      evaluator: newInternMentor,
-      score: 75.0,
-      classification: 'Progressing',
-      status: 'ACTIVE',
-      published: false,
-      joiningDate: '2026-09-26'
-    };
-    setInterns(prev => [newI, ...prev]);
-    addAudit('Add Intern', `Added ${newI.name} - ${newI.cohort}, ${newI.batch} (${newI.subBatch}) with mentor ${newI.mentor}`);
-    toast.success(`Intern "${newI.name}" added to ${newI.batch} (${newI.subBatch})!`);
-    setShowAddInternModal(false);
-    setNewInternName('');
-    setNewInternEmail('');
-    setNewInternBatch('Batch A');
-    setNewInternSubBatch('A1');
+
+    const assignedMentor = mentors.find(m => m.name === newInternMentor);
+    const internEmail = newInternEmail || `${newInternName.toLowerCase().replace(/\s+/g, '')}@college.edu`;
+
+    try {
+      const res = await authFetch('/emp/', {
+        method: 'POST',
+        body: JSON.stringify({
+          staffName: newInternName,
+          email: internEmail,
+          currentDepartmentName: newInternBatch,
+          positionName: `Software Intern (${newInternSubBatch})`,
+          roles: ['INTERN', 'EMPLOYEE'],
+          directManagerId: assignedMentor ? assignedMentor.id : null,
+          status: 'ACTIVE'
+        })
+      });
+      const data = await res.json();
+      const realId = data?.data?.id || `emp-${Date.now()}`;
+      const realCode = data?.data?.employeeCode || `INT-${Date.now().toString().slice(-4)}`;
+
+      const newI: Intern = {
+        id: realId,
+        name: newInternName,
+        email: internEmail,
+        code: realCode,
+        cohort: newInternCohort,
+        batch: newInternBatch,
+        subBatch: newInternSubBatch,
+        section: 'MIRAI',
+        subSection: 'Core',
+        mentor: newInternMentor,
+        evaluator: newInternMentor,
+        score: 75.0,
+        classification: 'Progressing',
+        status: 'ACTIVE',
+        published: false,
+        joiningDate: new Date().toISOString().split('T')[0]
+      };
+
+      setInterns(prev => [newI, ...prev]);
+      addAudit('Add Intern', `Added ${newI.name} (${realCode}) - ${newI.cohort}, ${newI.batch} (${newI.subBatch}) with mentor ${newI.mentor}`);
+      toast.success(`Intern "${newI.name}" saved to database and directory!`);
+      setShowAddInternModal(false);
+      setNewInternName('');
+      setNewInternEmail('');
+      setNewInternBatch('Batch A');
+      setNewInternSubBatch('A1');
+    } catch {
+      toast.error('Failed to create intern in backend.');
+    }
   };
 
   // 2. Activate / Deactivate Toggle
-  const handleToggleStatus = (intern: Intern) => {
+  const handleToggleStatus = async (intern: Intern) => {
     const nextStatus = intern.status === 'ACTIVE' ? 'DEACTIVATED' : 'ACTIVE';
     setInterns(prev => prev.map(i => i.id === intern.id ? { ...i, status: nextStatus } : i));
     addAudit('Status Change', `Changed ${intern.name} to ${nextStatus}`);
     toast.info(`${intern.name} is now ${nextStatus.toLowerCase()}`);
+
+    try {
+      const endpoint = nextStatus === 'DEACTIVATED' ? `/emp/${intern.id}/deactivate` : `/emp/${intern.id}/activate`;
+      await authFetch(endpoint, { method: 'PATCH' });
+    } catch {
+      authFetch(`/emp/${intern.id}/`, {
+        method: 'PUT',
+        body: JSON.stringify({ status: nextStatus === 'ACTIVE' ? 'ACTIVE' : 'INACTIVE' })
+      }).catch(() => {});
+    }
   };
 
   // Delete / Remove Intern Permanently
-  const handleConfirmDelete = (intern: Intern) => {
+  const handleConfirmDelete = async (intern: Intern) => {
     setInterns(prev => prev.filter(i => i.id !== intern.id));
     setGoals(prev => prev.filter(g => g.internName !== intern.name));
     setEvidenceList(prev => prev.filter(e => e.internName !== intern.name));
@@ -511,19 +748,22 @@ const HrDashboard: React.FC = () => {
     toast.success(`Intern "${intern.name}" has been removed.`);
     setInternToDelete(null);
 
-    fetch(`http://127.0.0.1:8000/api/emp/${intern.id}/`, {
-      method: 'DELETE',
-      headers: { 'ngrok-skip-browser-warning': 'true' }
-    }).catch(() => {});
+    try {
+      await authFetch(`/emp/${intern.id}/?permanent=true`, { method: 'DELETE' });
+    } catch {}
   };
 
   // Delete / Remove Mentor
-  const handleConfirmDeleteMentor = (mentor: Mentor) => {
+  const handleConfirmDeleteMentor = async (mentor: Mentor) => {
     setMentors(prev => prev.filter(m => m.id !== mentor.id));
     setInterns(prev => prev.map(i => i.mentor === mentor.name ? { ...i, mentor: 'Unassigned', evaluator: 'Unassigned' } : i));
     addAudit('Remove Mentor', `Removed mentor ${mentor.name} (${mentor.department})`);
     toast.success(`Mentor "${mentor.name}" has been removed.`);
     setMentorToDelete(null);
+
+    try {
+      await authFetch(`/emp/${mentor.id}/`, { method: 'DELETE' });
+    } catch {}
   };
 
   // 3. Bulk CSV Import
@@ -538,45 +778,101 @@ const HrDashboard: React.FC = () => {
     toast.success("Sample CSV template downloaded!");
   };
 
-  const handleCsvImport = () => {
-    const demoCsvInterns: Intern[] = [
-      { id: `csv-1`, name: 'Devon Miller', email: 'devon@college.edu', code: 'INT-110', cohort: 'MIRAI Cohort 1', batch: 'Batch A', subBatch: 'A1', section: 'Engineering', subSection: 'Backend', mentor: 'Marcus Vance', evaluator: 'Marcus Vance', score: 80.0, classification: 'Progressing', status: 'ACTIVE', published: false, joiningDate: '2026-09-26' },
-      { id: `csv-2`, name: 'Maya Lin', email: 'maya@college.edu', code: 'INT-111', cohort: 'MIRAI Cohort 1', batch: 'Batch B', subBatch: 'B1', section: 'Product & Design', subSection: 'UI/UX', mentor: 'Sarah Jenkins', evaluator: 'Sarah Jenkins', score: 88.0, classification: 'Achieved', status: 'ACTIVE', published: false, joiningDate: '2026-09-26' }
+  const handleCsvImport = async () => {
+    const demoCsvInterns = [
+      { name: 'Devon Miller', email: 'devon@college.edu', code: 'INT-110', cohort: 'MIRAI Cohort 1', batch: 'Batch A', subBatch: 'A1', section: 'Engineering', subSection: 'Backend', mentor: 'Marcus Vance', evaluator: 'Marcus Vance', score: 80.0, classification: 'Progressing' as const, status: 'ACTIVE' as const, published: false, joiningDate: '2026-09-26' },
+      { name: 'Maya Lin', email: 'maya@college.edu', code: 'INT-111', cohort: 'MIRAI Cohort 1', batch: 'Batch B', subBatch: 'B1', section: 'Product & Design', subSection: 'UI/UX', mentor: 'Sarah Jenkins', evaluator: 'Sarah Jenkins', score: 88.0, classification: 'Achieved' as const, status: 'ACTIVE' as const, published: false, joiningDate: '2026-09-26' }
     ];
-    setInterns(prev => [...demoCsvInterns, ...prev]);
-    addAudit('CSV Import', 'Imported 2 MIRAI interns (Batch A/A1 & Batch B/B1) via CSV');
-    toast.success("Imported 2 MIRAI interns with Batch & Sub-Batch from CSV!");
+
+    for (const c of demoCsvInterns) {
+      try {
+        const res = await authFetch('/emp/', {
+          method: 'POST',
+          body: JSON.stringify({
+            staffName: c.name,
+            email: c.email,
+            currentDepartmentName: c.batch,
+            positionName: `Software Intern (${c.subBatch})`,
+            roles: ['INTERN', 'EMPLOYEE'],
+            status: 'ACTIVE'
+          })
+        });
+        const d = await res.json();
+        const realId = d?.data?.id || `csv-${Date.now()}`;
+        setInterns(prev => [{ ...c, id: realId }, ...prev]);
+      } catch {
+        setInterns(prev => [{ ...c, id: `csv-${Date.now()}` }, ...prev]);
+      }
+    }
+
+    addAudit('CSV Import', 'Imported 2 MIRAI interns (Batch A/A1 & Batch B/B1) via CSV and saved to database');
+    toast.success("Imported 2 MIRAI interns with Batch & Sub-Batch to database!");
     setShowCsvModal(false);
   };
 
   // 4. Add Mentor
-  const handleAddMentor = (e: React.FormEvent) => {
+  const handleAddMentor = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newMentorName) return;
-    const newM: Mentor = {
-      id: `m-${Date.now()}`,
-      name: newMentorName,
-      email: newMentorEmail || `${newMentorName.toLowerCase().replace(/\s+/g, '')}@college.edu`,
-      department: newMentorDept,
-      specialization: newMentorSpec || 'General Mentorship',
-      menteeCount: 0,
-      maxCapacity: 4
-    };
-    setMentors(prev => [...prev, newM]);
-    addAudit('Add Mentor', `Added mentor ${newM.name} (${newM.department})`);
-    toast.success(`Mentor "${newM.name}" added!`);
-    setShowAddMentorModal(false);
-    setNewMentorName('');
-    setNewMentorEmail('');
-    setNewMentorSpec('');
+
+    const mentorEmail = newMentorEmail || `${newMentorName.toLowerCase().replace(/\s+/g, '')}@college.edu`;
+
+    try {
+      const res = await authFetch('/emp/', {
+        method: 'POST',
+        body: JSON.stringify({
+          staffName: newMentorName,
+          email: mentorEmail,
+          currentDepartmentName: newMentorDept,
+          positionName: newMentorSpec || 'Technical Mentor',
+          roles: ['MANAGER', 'EMPLOYEE'],
+          status: 'ACTIVE'
+        })
+      });
+      const data = await res.json();
+      const realId = data?.data?.id || `m-${Date.now()}`;
+
+      const newM: Mentor = {
+        id: realId,
+        name: newMentorName,
+        email: mentorEmail,
+        department: newMentorDept,
+        specialization: newMentorSpec || 'General Mentorship',
+        menteeCount: 0,
+        maxCapacity: 4
+      };
+      setMentors(prev => [...prev, newM]);
+      addAudit('Add Mentor', `Added mentor ${newM.name} (${newM.department})`);
+      toast.success(`Mentor "${newM.name}" saved to database!`);
+      setShowAddMentorModal(false);
+      setNewMentorName('');
+      setNewMentorEmail('');
+      setNewMentorSpec('');
+    } catch {
+      toast.error('Failed to save mentor in backend.');
+    }
   };
 
   // 5. Assign Mentor Inline
-  const handleAssignMentor = (internId: string, mentorName: string) => {
+  const handleAssignMentor = async (internId: string, mentorName: string) => {
     setInterns(prev => prev.map(i => i.id === internId ? { ...i, mentor: mentorName, evaluator: mentorName } : i));
     const target = interns.find(i => i.id === internId);
     addAudit('Assign Mentor', `Assigned ${mentorName} to ${target?.name}`);
     toast.success(`Assigned ${mentorName} as mentor!`);
+
+    const mentorObj = mentors.find(m => m.name === mentorName);
+    if (mentorObj) {
+      try {
+        await authFetch(`/emp/${internId}/`, {
+          method: 'PUT',
+          body: JSON.stringify({ directManagerId: mentorObj.id })
+        });
+        setMentors(prev => prev.map(m => {
+          const count = interns.filter(i => (i.id === internId ? mentorName : i.mentor) === m.name).length;
+          return { ...m, menteeCount: count };
+        }));
+      } catch {}
+    }
   };
 
   // 6. Create Cohort / Batch
@@ -599,50 +895,89 @@ const HrDashboard: React.FC = () => {
   };
 
   // 7. Create Evaluation Quarter / Batch
-  const handleCreateCycle = (e: React.FormEvent) => {
+  const handleCreateCycle = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newCycleName) return;
-    const newCy: EvaluationCycle = {
-      id: `cy-${Date.now()}`,
-      name: newCycleName,
-      quarter: newCycleQuarter,
-      startDate: '2026-04-01',
-      endDate: '2026-06-30',
-      status: 'ACTIVE'
-    };
-    setCycles(prev => [newCy, ...prev]);
-    addAudit('Launch Term', `Launched ${newCy.name}`);
-    toast.success(`MIRAI Evaluation Term "${newCy.name}" launched!`);
-    setShowAddCycleModal(false);
-    setNewCycleName('');
+
+    try {
+      const res = await authFetch('/appraisal-cycles', {
+        method: 'POST',
+        body: JSON.stringify({
+          cycleName: newCycleName,
+          startDate: '2026-04-01',
+          endDate: '2026-06-30',
+          evaluationPeriod: newCycleQuarter,
+          status: 'ACTIVE'
+        })
+      });
+      const data = await res.json();
+      const newCy: EvaluationCycle = {
+        id: String(data?.data?.uuid || data?.data?.cycleId || data?.data?.id || `cy-${Date.now()}`),
+        name: newCycleName,
+        quarter: newCycleQuarter,
+        startDate: '2026-04-01',
+        endDate: '2026-06-30',
+        status: 'ACTIVE'
+      };
+      setCycles(prev => [newCy, ...prev]);
+      addAudit('Launch Term', `Launched ${newCy.name}`);
+      toast.success(`Evaluation Cycle "${newCy.name}" launched and saved to backend!`);
+      setShowAddCycleModal(false);
+      setNewCycleName('');
+    } catch {
+      toast.error('Failed to create cycle in backend.');
+    }
   };
 
   // 8. Assign Goal
-  const handleAssignGoal = (e: React.FormEvent) => {
+  const handleAssignGoal = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newGoalTitle) return;
-    const newG: Goal = {
-      id: `g-${Date.now()}`,
-      internName: newGoalIntern,
-      title: newGoalTitle,
-      category: newGoalCategory,
-      section: 'Engineering',
-      dueDate: '2026-03-31',
-      progress: 0,
-      status: 'Not Started'
-    };
-    setGoals(prev => [newG, ...prev]);
-    addAudit('Assign Goal', `Assigned "${newG.title}" to ${newG.internName}`);
-    toast.success(`Goal assigned to ${newG.internName}!`);
-    setShowAddGoalModal(false);
-    setNewGoalTitle('');
+
+    const targetIntern = interns.find(i => i.name === newGoalIntern);
+    const activeCycle = cycles.find(c => c.status === 'ACTIVE') || cycles[0];
+
+    try {
+      const res = await authFetch('/api/goals/', {
+        method: 'POST',
+        body: JSON.stringify({
+          employee: targetIntern?.id,
+          cycle: activeCycle?.id,
+          title: newGoalTitle,
+          description: newGoalCategory,
+          due_date: '2026-03-31',
+          priority: 'HIGH',
+          status: 'NOT_STARTED'
+        })
+      });
+      const data = await res.json();
+      const newG: Goal = {
+        id: String(data?.id || `g-${Date.now()}`),
+        internName: newGoalIntern,
+        title: newGoalTitle,
+        category: newGoalCategory,
+        section: 'Engineering',
+        dueDate: '2026-03-31',
+        progress: 0,
+        status: 'Not Started'
+      };
+      setGoals(prev => [newG, ...prev]);
+      addAudit('Assign Goal', `Assigned "${newG.title}" to ${newG.internName}`);
+      toast.success(`Goal assigned to ${newG.internName} and synced to Intern & Manager portals!`);
+      setShowAddGoalModal(false);
+      setNewGoalTitle('');
+    } catch {
+      toast.error('Failed to assign goal in backend.');
+    }
   };
 
   // 10. Track Goal Progress (+10% / Complete)
-  const handleProgressBump = (goalId: string, amount: number) => {
+  const handleProgressBump = async (goalId: string, amount: number) => {
+    let nextProgress = 0;
     setGoals(prev => prev.map(g => {
       if (g.id === goalId) {
         const next = Math.min(100, g.progress + amount);
+        nextProgress = next;
         return {
           ...g,
           progress: next,
@@ -651,7 +986,17 @@ const HrDashboard: React.FC = () => {
       }
       return g;
     }));
-    toast.info("Goal progress updated!");
+    toast.info(`Goal progress updated to ${nextProgress}%`);
+
+    try {
+      await authFetch(`/api/goals/${goalId}/progress/`, {
+        method: 'POST',
+        body: JSON.stringify({
+          progress_percentage: nextProgress,
+          comment: `Progress updated by ${hrName}`
+        })
+      });
+    } catch {}
   };
 
   // 12. Create Question
@@ -684,7 +1029,7 @@ const HrDashboard: React.FC = () => {
   };
 
   // 16 & 17. Grade Intern & Classify on The 8 Core Competencies
-  const handleSaveGrade = (e: React.FormEvent) => {
+  const handleSaveGrade = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!gradingIntern) return;
 
@@ -711,6 +1056,23 @@ const HrDashboard: React.FC = () => {
 
     addAudit('Graded Intern', `Graded ${gradingIntern.name}: ${finalScore}% (${classification}) [Tech: ${techScore.toFixed(1)}/60, Beh: ${behScore.toFixed(1)}/40]`);
     toast.success(`${gradingIntern.name} graded as "${classification}" (${finalScore}%)!`);
+
+    const activeCycle = cycles.find(c => c.status === 'ACTIVE') || cycles[0];
+
+    try {
+      await authFetch('/appraisals/', {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: gradingIntern.id,
+          cycleId: activeCycle?.id,
+          score: finalScore,
+          classification,
+          comments: `Graded on 8 core competencies: Tech ${techScore.toFixed(1)}/60, Beh ${behScore.toFixed(1)}/40`,
+          publish: gradingIntern.published
+        })
+      });
+    } catch {}
+
     setGradingIntern(null);
   };
 
@@ -724,37 +1086,67 @@ const HrDashboard: React.FC = () => {
     setSelectedForPublish(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
   };
 
-  const handlePublishSelected = () => {
+  const handlePublishSelected = async () => {
     if (selectedForPublish.length === 0) {
       toast.warning("Please select at least one intern to publish.");
       return;
     }
-    setInterns(prev => prev.map(i => selectedForPublish.includes(i.id) ? { ...i, published: true } : i));
-    addAudit('Publish Results', `Published results for ${selectedForPublish.length} interns`);
-    toast.success(`Published results for ${selectedForPublish.length} interns!`);
+    const idsToPublish = [...selectedForPublish];
+    setInterns(prev => prev.map(i => idsToPublish.includes(i.id) ? { ...i, published: true } : i));
+    addAudit('Publish Results', `Published results for ${idsToPublish.length} interns`);
+    toast.success(`Published results for ${idsToPublish.length} interns! Scorecards are now visible to interns.`);
     setSelectedForPublish([]);
+
+    for (const id of idsToPublish) {
+      const intern = interns.find(i => i.id === id);
+      try {
+        await authFetch(`/appraisals/${id}/publish/`, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'publish', published: true, score: intern?.score, classification: intern?.classification })
+        });
+      } catch {}
+    }
   };
 
-  const handleTogglePublishOne = (intern: Intern) => {
+  const handleTogglePublishOne = async (intern: Intern) => {
     const nextPub = !intern.published;
     setInterns(prev => prev.map(i => i.id === intern.id ? { ...i, published: nextPub } : i));
     addAudit(nextPub ? 'Publish Result' : 'Unpublish Result', `Toggled result for ${intern.name}`);
     toast.success(`${intern.name} result is now ${nextPub ? 'Published' : 'Draft'}`);
+
+    try {
+      await authFetch(`/appraisals/${intern.id}/publish/`, {
+        method: 'POST',
+        body: JSON.stringify({ action: nextPub ? 'publish' : 'unpublish', published: nextPub, score: intern.score, classification: intern.classification })
+      });
+    } catch {}
   };
 
   // 19. Evidence Approval
-  const handleEvidenceAction = (id: string, status: Evidence['status']) => {
+  const handleEvidenceAction = async (id: string, status: Evidence['status']) => {
     setEvidenceList(prev => prev.map(ev => ev.id === id ? { ...ev, status } : ev));
     toast.info(`Evidence status: ${status}`);
+
+    try {
+      await authFetch(`/api/evidence/${id}/review/`, {
+        method: 'POST',
+        body: JSON.stringify({
+          review_status: status === 'APPROVED' ? 'APPROVED' : 'REJECTED',
+          review_notes: status === 'APPROVED' ? 'Approved by HR Admin' : 'Changes requested by HR Admin'
+        })
+      });
+    } catch {}
   };
 
   // 20. Feedback
-  const handleAddFeedback = (e: React.FormEvent) => {
+  const handleAddFeedback = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newFeedbackMsg) return;
+
+    const targetIntern = interns.find(i => i.name === newFeedbackTo);
     const newFb: Feedback = {
       id: `fb-${Date.now()}`,
-      fromName: 'Sarah HR',
+      fromName: hrName,
       fromRole: 'HR Admin',
       toName: newFeedbackTo,
       type: newFeedbackType,
@@ -765,6 +1157,17 @@ const HrDashboard: React.FC = () => {
     toast.success(`Feedback sent to ${newFb.toName}!`);
     setShowFeedbackModal(false);
     setNewFeedbackMsg('');
+
+    try {
+      await authFetch('/api/feedback/', {
+        method: 'POST',
+        body: JSON.stringify({
+          recipient: targetIntern?.id,
+          message: newFeedbackMsg,
+          feedback_type: newFeedbackType
+        })
+      });
+    } catch {}
   };
 
   // 21. Export CSV

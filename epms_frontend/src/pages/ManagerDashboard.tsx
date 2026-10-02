@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts';
-import { Users, CheckCircle2, AlertCircle, HelpCircle, TrendingUp, Layers, Briefcase, AlertTriangle } from 'lucide-react';
+import { Users, CheckCircle2, AlertCircle, HelpCircle, TrendingUp, Layers, Briefcase, AlertTriangle, ArrowRight } from 'lucide-react';
 import { useGetManagerDashboardQuery } from '../features/dashboard/dashboardApi';
 import DashboardStatCard from '../components/dashboard/DashboardStatCard';
 import ChartCard from '../components/dashboard/ChartCard';
@@ -10,6 +10,7 @@ import { scoreToColor, progressToColor} from '../constants/dashboardColors';
 import EmployeeDashboard from './EmployeeDashboard';
 
 const ManagerDashboard: React.FC = () => {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'team' | 'personal'>('team');
   const { data, isLoading, error } = useGetManagerDashboardQuery();
 
@@ -100,18 +101,57 @@ const ManagerDashboard: React.FC = () => {
         </div>
       </div>
 
-      {/* Stat cards */}
+      {/* Interactive Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <DashboardStatCard title="Team size" value={data?.teamSize ?? 0} icon={<Users size={15} />} color="blue" />
-        <DashboardStatCard title="Reviews completed" value={`${data?.reviewsCompleted ?? 0}/${data?.totalReviews ?? 0}`} icon={<CheckCircle2 size={15} />} color="green" />
-        <DashboardStatCard title="Pending reviews" value={data?.pendingReviews ?? 0} icon={<AlertCircle size={15} />} color="orange" />
-        <DashboardStatCard title="Feedback requests" value={data?.feedbackRequests ?? 0} icon={<HelpCircle size={15} />} color="purple" />
+        <DashboardStatCard
+          title="Team size"
+          value={data?.teamSize ?? 0}
+          icon={<Users size={16} />}
+          color="blue"
+          subtitle="View assigned mentees →"
+          onClick={() => navigate('/manager/mentees')}
+        />
+        <DashboardStatCard
+          title="Reviews completed"
+          value={`${data?.reviewsCompleted ?? 0}/${data?.totalReviews ?? 0}`}
+          icon={<CheckCircle2 size={16} />}
+          color="green"
+          subtitle="View evaluations →"
+          onClick={() => navigate('/appraisal', { state: { activeTab: 'team', statusFilter: 'FINALIZED' } })}
+        />
+        <DashboardStatCard
+          title="Pending reviews"
+          value={data?.pendingReviews ?? 0}
+          icon={<AlertCircle size={16} />}
+          color="orange"
+          subtitle="Conduct pending reviews →"
+          onClick={() => navigate('/appraisal', { state: { activeTab: 'team', statusFilter: 'PENDING' } })}
+        />
+        <DashboardStatCard
+          title="Feedback requests"
+          value={data?.feedbackRequests ?? 0}
+          icon={<HelpCircle size={16} />}
+          color="purple"
+          subtitle="Review evidence & feedback →"
+          onClick={() => navigate('/manager/evidence')}
+        />
       </div>
 
       {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <div className="lg:col-span-2">
-          <ChartCard title="Team performance overview">
+          <ChartCard
+            title="Team performance overview"
+            action={
+              <button
+                onClick={() => navigate('/manager/mentees')}
+                className="text-xs font-semibold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer flex items-center gap-1"
+              >
+                <span>View Mentees</span>
+                <ArrowRight size={12} />
+              </button>
+            }
+          >
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={data?.teamPerformance}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F0F2F6" />
@@ -129,16 +169,30 @@ const ManagerDashboard: React.FC = () => {
         </div>
 
         <div style={{ background: "#FFFFFF", border: "0.5px solid #E4E6EC", borderRadius: 12, padding: "16px 18px" }}>
-          <div className="flex items-center gap-2" style={{ marginBottom: 16 }}>
-            <TrendingUp size={15} style={{ color: "#1A56DB" }} aria-hidden="true" />
-            <p style={{ fontSize: 14, fontWeight: 500, color: "#111827" }}>Team KPI progress</p>
+          <div className="flex items-center justify-between" style={{ marginBottom: 16 }}>
+            <div className="flex items-center gap-2">
+              <TrendingUp size={15} style={{ color: "#1A56DB" }} aria-hidden="true" />
+              <p style={{ fontSize: 14, fontWeight: 500, color: "#111827", margin: 0 }}>Team KPI progress</p>
+            </div>
+            <button
+              onClick={() => navigate('/manager/tasks')}
+              className="text-xs font-semibold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer flex items-center gap-1"
+            >
+              <span>Manage</span>
+              <ArrowRight size={12} />
+            </button>
           </div>
-          <div className="space-y-4">
+          <div className="space-y-3.5 max-h-[300px] overflow-y-auto pr-1">
             {data?.teamKpis.map((kpi, idx) => (
-              <div key={idx}>
-                <div className="flex justify-between" style={{ marginBottom: 5 }}>
-                  <span style={{ fontSize: 12, color: "#5A6070" }}>{kpi.name}</span>
-                  <span style={{ fontSize: 12, fontWeight: 500, color: "#111827" }}>{kpi.progress}%</span>
+              <div
+                key={idx}
+                onClick={() => navigate('/manager/tasks')}
+                className="cursor-pointer group p-1.5 -mx-1.5 rounded-lg hover:bg-slate-50 transition-colors"
+                title="Click to view tasks"
+              >
+                <div className="flex justify-between" style={{ marginBottom: 4 }}>
+                  <span className="group-hover:text-blue-600 transition-colors" style={{ fontSize: 12, color: "#5A6070" }}>{kpi.name}</span>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: "#111827" }}>{Math.round(kpi.progress)}%</span>
                 </div>
                 <div style={{ height: 6, background: "#EEF0F6", borderRadius: 3, overflow: "hidden" }}>
                   <div
@@ -167,12 +221,16 @@ const ManagerDashboard: React.FC = () => {
             value={data?.teamAvgScore?.toFixed(1) ?? 'N/A'}
             icon={<TrendingUp size={15} />}
             color="blue"
+            subtitle="View team performance pulse →"
+            onClick={() => navigate('/performance-history/manager')}
           />
           <DashboardStatCard
             title="Company average score"
             value={data?.companyAvgScore?.toFixed(1) ?? 'N/A'}
             icon={<TrendingUp size={15} />}
             color="green"
+            subtitle="View organization benchmarks →"
+            onClick={() => navigate('/performance-history/manager')}
           />
         </div>
       )}
@@ -180,13 +238,26 @@ const ManagerDashboard: React.FC = () => {
       {/* At-Risk Employees */}
       {data?.atRiskEmployees && data.atRiskEmployees.length > 0 && (
         <div style={{ background: "#FFFFFF", border: "0.5px solid #E4E6EC", borderRadius: 12, padding: "16px 18px" }}>
-          <div className="flex items-center gap-2" style={{ marginBottom: 12 }}>
-            <AlertTriangle size={15} style={{ color: "#E24B4A" }} aria-hidden="true" />
-            <p style={{ fontSize: 14, fontWeight: 500, color: "#111827" }}>At-risk employees</p>
+          <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={15} style={{ color: "#E24B4A" }} aria-hidden="true" />
+              <p style={{ fontSize: 14, fontWeight: 500, color: "#111827", margin: 0 }}>At-risk employees</p>
+            </div>
+            <button
+              onClick={() => navigate('/manager/mentees')}
+              className="text-xs font-semibold text-rose-600 hover:underline cursor-pointer"
+            >
+              Intervene →
+            </button>
           </div>
           <div className="space-y-2">
             {data.atRiskEmployees.map((emp, idx) => (
-              <div key={idx} className="flex items-center justify-between p-2 rounded" style={{ background: "#FCEBEB" }}>
+              <div
+                key={idx}
+                onClick={() => navigate('/manager/mentees', { state: { search: emp.name } })}
+                className="flex items-center justify-between p-2.5 rounded-lg hover:bg-rose-100/70 transition-colors cursor-pointer"
+                style={{ background: "#FCEBEB" }}
+              >
                 <span style={{ fontSize: 12, color: "#111827", fontWeight: 500 }}>{emp.name}</span>
                 <span style={{ fontSize: 11, color: "#E24B4A", fontWeight: 600 }}>↓ {Math.abs(emp.delta || 0).toFixed(1)} pts</span>
               </div>
@@ -198,10 +269,28 @@ const ManagerDashboard: React.FC = () => {
       {/* Pending Self-Assessments */}
       {data?.pendingSelfAssessmentNames && data.pendingSelfAssessmentNames.length > 0 && (
         <div style={{ background: "#FFFFFF", border: "0.5px solid #E4E6EC", borderRadius: 12, padding: "16px 18px" }}>
-          <p style={{ fontSize: 14, fontWeight: 500, color: "#111827", marginBottom: 12 }}>Awaiting self-assessments ({data.pendingSelfAssessmentNames.length})</p>
-          <div className="space-y-1">
-            {data.pendingSelfAssessmentNames.map((name, idx) => (
-              <div key={idx} style={{ fontSize: 12, color: "#5A6070", paddingLeft: 8 }}>• {name}</div>
+          <div className="flex items-center justify-between" style={{ marginBottom: 12 }}>
+            <p style={{ fontSize: 14, fontWeight: 500, color: "#111827", margin: 0 }}>
+              Awaiting self-assessments ({data.pendingSelfAssessmentNames.length})
+            </p>
+            <button
+              onClick={() => navigate('/appraisal', { state: { activeTab: 'team', statusFilter: 'PENDING' } })}
+              className="text-xs font-semibold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer flex items-center gap-1"
+            >
+              <span>View in Appraisals</span>
+              <ArrowRight size={12} />
+            </button>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
+            {data.pendingSelfAssessmentNames.slice(0, 18).map((name, idx) => (
+              <div
+                key={idx}
+                onClick={() => navigate('/manager/mentees', { state: { search: name } })}
+                className="text-xs text-slate-600 bg-slate-50 hover:bg-indigo-50 hover:text-indigo-700 hover:border-indigo-200 border border-slate-200/60 rounded-lg p-2 truncate transition-colors cursor-pointer"
+                title={`Click to view ${name}`}
+              >
+                • {name}
+              </div>
             ))}
           </div>
         </div>
@@ -210,6 +299,8 @@ const ManagerDashboard: React.FC = () => {
       {/* Tasks */}
       <TaskPanel
         title="Urgent team reviews"
+        onViewAll={() => navigate('/manager/evidence')}
+        onTaskClick={() => navigate('/manager/evidence')}
         tasks={data?.urgentReviews.map(t => ({
           id: t.id,
           title: t.title,

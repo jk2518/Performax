@@ -60,10 +60,23 @@ const LoginPage = () => {
     }
   };
 
-  const handleQuickPersona = (account: (typeof DEMO_ACCOUNTS)[0]) => {
+  const handleQuickPersona = async (account: (typeof DEMO_ACCOUNTS)[0]) => {
     setEmail(account.email);
     setPassword(account.pass);
     setError("");
+
+    try {
+      const response = await login({ email: account.email.trim(), password: account.pass }).unwrap();
+      dispatch(loginSuccess(response));
+      navigate(from, { replace: true });
+    } catch (err: any) {
+      const msg =
+        err?.data?.detail ||
+        err?.data?.message ||
+        err?.message ||
+        "Invalid email or password. Please check your credentials.";
+      setError(msg);
+    }
   };
 
   return (
@@ -233,7 +246,7 @@ const LoginPage = () => {
                 Continuous Feedback
               </div>
               <div className="text-xs text-slate-300">
-                Peer & 360 multi-rater streams with anonymous sentiment tagging.
+                Continuous peer & mentor feedback with sentiment tagging.
               </div>
             </div>
 

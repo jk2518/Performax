@@ -67,6 +67,36 @@ const EmployeeForm = () => {
   const [uploadProfileImage, { isLoading: isUploading }] =
     useUploadProfileImageMutation();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  const getAvatarUrl = (img?: string | null) => {
+    if (!img || img === "default.jpg") return null;
+    if (img.startsWith("blob:") || img.startsWith("data:") || img.startsWith("http://") || img.startsWith("https://")) {
+      return img;
+    }
+    return img.startsWith("/") ? img : `/${img}`;
+  };
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+    };
+  }, [previewUrl]);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      setSelectedFile(file);
+      setPreviewUrl(URL.createObjectURL(file));
+    }
+  };
+
+  const handleRemoveFile = () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setSelectedFile(null);
+    setPreviewUrl(null);
+  };
 
   const [formData, setFormData] = useState<
     Partial<CreateEmployeeRequest & UpdateEmployeeRequest>
@@ -289,11 +319,37 @@ const EmployeeForm = () => {
                 type="file"
                 accept="image/*"
                 style={inputStyle}
-                onChange={(e) => {
-                  if (e.target.files && e.target.files.length > 0)
-                    setSelectedFile(e.target.files[0]);
-                }}
+                onChange={handleFileChange}
               />
+              {(previewUrl || (isEdit && formData.profileImage)) && (
+                <div className="flex items-center gap-2 mt-2 p-1.5 rounded-lg bg-blue-50/80 border border-blue-200">
+                  <img
+                    src={previewUrl || getAvatarUrl(formData.profileImage) || ""}
+                    alt="Preview"
+                    className="w-8 h-8 rounded-full object-cover border border-blue-300 shadow-xs"
+                    onError={(e) => { e.currentTarget.style.display = "none"; }}
+                  />
+                  <div className="text-[11px] flex-1 truncate">
+                    {selectedFile ? (
+                      <>
+                        <span className="font-semibold text-slate-800">{selectedFile.name}</span>
+                        <span className="text-slate-500 ml-1">({(selectedFile.size / 1024).toFixed(0)} KB)</span>
+                      </>
+                    ) : (
+                      <span className="text-slate-600 font-medium">Current profile photo</span>
+                    )}
+                  </div>
+                  {selectedFile && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveFile}
+                      className="text-[11px] text-red-600 hover:text-red-800 font-medium px-1.5 py-0.5 rounded hover:bg-red-50"
+                    >
+                      Clear
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
             <div>
               <label style={labelStyle}>Phone Number *</label>

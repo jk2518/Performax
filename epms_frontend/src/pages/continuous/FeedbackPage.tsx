@@ -435,33 +435,50 @@ const FeedbackPage = () => {
   const [tagToDelete, setTagToDelete] = useState<number | null>(null);
   const [feedbackToDelete, setFeedbackToDelete] = useState<number | null>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [editingEmployee, setEditingEmployee] = useState<{ id: number; name: string } | null>(null);
+  const [editingEmployee, setEditingEmployee] = useState<{ id: number | string; name: string } | null>(null);
   const [expandedFeedbackId, setExpandedFeedbackId] = useState<number | null>(null);
 
-  const deptEmployees = employees?.filter(emp =>
+  // 1. Direct reports or mentees of the current manager
+  const directReports = (employees || []).filter(emp =>
+    String(emp.directManagerId) === String(user?.id) ||
+    String(emp.directManagerId) === String(user?.profile?.id) ||
+    (emp.directManagerName && (emp.directManagerName === user?.username || emp.directManagerName === user?.staffName))
+  );
+
+  // 2. Department members (excluding those already in direct reports)
+  const deptEmployees = (employees || []).filter(emp =>
     emp.currentDepartmentName && user?.currentDepartmentName &&
-    emp.currentDepartmentName === user?.currentDepartmentName
-  ) || [];
+    emp.currentDepartmentName === user?.currentDepartmentName &&
+    !directReports.some(d => String(d.id) === String(emp.id))
+  );
+
+  // 3. Other staff across company (excluding direct reports and dept members)
+  const otherEmployees = (employees || []).filter(emp =>
+    !directReports.some(d => String(d.id) === String(emp.id)) &&
+    !deptEmployees.some(d => String(d.id) === String(emp.id))
+  );
 
   const availableEmployees = (isAdmin || isHR)
     ? (employees && employees.length > 0 ? employees : [])
-    : (deptEmployees.length > 0 ? deptEmployees : (employees || []));
+    : [
+        ...directReports,
+        ...deptEmployees,
+        ...(otherEmployees || []),
+      ];
 
-  const blankFeedback = { employeeId: 0, tagId: "" as number | "", feedbackType: FeedbackType.PRAISE, description: "" };
+  const blankFeedback = { employeeId: "" as number | string, tagId: "" as number | "", feedbackType: FeedbackType.PRAISE, description: "" };
   const [showModal, setShowModal] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<ContinuousStatus>(ContinuousStatus.PUBLISHED);
   const [newFeedback, setNewFeedback] = useState<{
-    employeeId: number;
+    employeeId: number | string;
     tagId: number | "";
     feedbackType: FeedbackType;
     description: string;
-
   }>({
-    employeeId: 0,
+    employeeId: "",
     tagId: "",
     feedbackType: FeedbackType.PRAISE,
     description: "",
-
   });
 
   const selectedEmp = employees?.find(e => String(e.id) === String(newFeedback.employeeId));
@@ -495,7 +512,7 @@ const FeedbackPage = () => {
       setShowModal(false);
       setEditingId(null);
       setEditingEmployee(null);
-      setNewFeedback({ employeeId: 0, tagId: "", feedbackType: FeedbackType.PRAISE, description: "" });
+      setNewFeedback({ employeeId: "", tagId: "", feedbackType: FeedbackType.PRAISE, description: "" });
     } catch (err: any) {
       toast.error("Failed to save feedback.");
     }
@@ -875,14 +892,36 @@ const FeedbackPage = () => {
                         <span style={{ marginLeft: 'auto', fontSize: 9, fontWeight: 700, color: '#64748B', textTransform: 'uppercase', letterSpacing: '0.4px', background: '#E2E8F0', borderRadius: 6, padding: '2px 6px' }}>Fixed</span>
                       </div>
                     ) : (
-                      <select required className="office-input" value={newFeedback.employeeId}
-                        onChange={e => setNewFeedback({ ...newFeedback, employeeId: Number(e.target.value) })}>
+                      <select required className="office-input" value={newFeedback.employeeId || ""}
+                        onChange={e => setNewFeedback({ ...newFeedback, employeeId: e.target.value })}>
                         <option value="">Choose Staff</option>
-                        {availableEmployees?.map(emp => (
-                          <option key={emp.id} value={emp.id}>
-                            {emp.staffName} ({emp.currentDepartmentName || 'General'} - {emp.positionName || 'Member'})
-                          </option>
-                        ))}
+                        {directReports.length > 0 && (
+                          <optgroup label="Direct Reports / Mentees">
+                            {directReports.map(emp => (
+                              <option key={emp.id} value={emp.id}>
+                                {emp.staffName} ({emp.currentDepartmentName || 'General'} - {emp.positionName || 'Member'})
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {deptEmployees.length > 0 && (
+                          <optgroup label="Department Members">
+                            {deptEmployees.map(emp => (
+                              <option key={emp.id} value={emp.id}>
+                                {emp.staffName} ({emp.currentDepartmentName || 'General'} - {emp.positionName || 'Member'})
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {otherEmployees.length > 0 && (
+                          <optgroup label={directReports.length > 0 || deptEmployees.length > 0 ? "All Other Staff" : "All Employees"}>
+                            {otherEmployees.map(emp => (
+                              <option key={emp.id} value={emp.id}>
+                                {emp.staffName} ({emp.currentDepartmentName || 'General'} - {emp.positionName || 'Member'})
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
                       </select>
                     )}
                   </div>
@@ -974,7 +1013,7 @@ const FeedbackPage = () => {
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, paddingTop: 16, borderTop: '1px solid #E2E8F0', flexWrap: 'wrap' }}>
                   <button type="button"
-                    onClick={() => { setShowModal(false); setEditingId(null); setEditingEmployee(null); setNewFeedback({ employeeId: 0, tagId: '', feedbackType: FeedbackType.PRAISE, description: '' }); }}
+                    onClick={() => { setShowModal(false); setEditingId(null); setEditingEmployee(null); setNewFeedback({ employeeId: '', tagId: '', feedbackType: FeedbackType.PRAISE, description: '' }); }}
                     className="office-button-secondary">
                     Cancel
                   </button>

@@ -937,7 +937,7 @@ export const PerformanceHistoryManagerPage = () => {
 
   const { data: employeeHistoryResponse, isLoading: isEmpHistoryLoading } = useGetPerformanceHistoryByEmployeeQuery(
     { 
-      employeeId: Number(selectedEmpId), 
+      employeeId: selectedEmpId, 
       sourceType: filterType,
       onlyByManager: selectedEmpId === '' 
         ? undefined 

@@ -56,6 +56,14 @@ const selectStyle: React.CSSProperties = {
   outline: "none",
 };
 
+const getAvatarUrl = (img?: string | null) => {
+  if (!img || img === "default.jpg") return null;
+  if (img.startsWith("blob:") || img.startsWith("data:") || img.startsWith("http://") || img.startsWith("https://")) {
+    return img;
+  }
+  return img.startsWith("/") ? img : `/${img}`;
+};
+
 const EmployeeList = () => {
   const [page, setPage] = useState(0);
   const [size] = useState(10);
@@ -507,7 +515,7 @@ const EmployeeList = () => {
                           {emp.profileImage &&
                           emp.profileImage !== "default.jpg" ? (
                             <img
-                              src={`http://localhost:8000${emp.profileImage}`}
+                              src={getAvatarUrl(emp.profileImage) || ""}
                               alt={emp.staffName || "Employee"}
                               className="w-full h-full object-cover"
                               onError={(e) => {

@@ -268,14 +268,14 @@ export const PerformanceHistoryPage = () => {
   }, [isPlainManager, departments, selectedDeptId]);
 
   const { data: employeeHistoryResponse, isLoading: isEmpHistoryLoading } = useGetPerformanceHistoryByEmployeeQuery(
-    { employeeId: Number(selectedEmpId), sourceType: filterType, page: currentPage - 1, size: itemsPerPage },
+    { employeeId: selectedEmpId, sourceType: filterType, page: currentPage - 1, size: itemsPerPage },
     { skip: !selectedEmpId }
   );
   const { data: globalHistoryResponse, isLoading: isGlobalHistoryLoading } = useGetAllPerformanceHistoryQuery(
     { sourceType: filterType, page: currentPage - 1, size: itemsPerPage },
     { skip: !isGovernanceMode || !!selectedEmpId }
   );
-  const { data: employeeAnalytics } = useGetEmployeePerformanceHistoryAnalyticsQuery(Number(selectedEmpId), { skip: !selectedEmpId });
+  const { data: employeeAnalytics } = useGetEmployeePerformanceHistoryAnalyticsQuery(selectedEmpId, { skip: !selectedEmpId });
   const { data: globalAnalytics } = useGetPerformanceHistoryAnalyticsQuery(undefined, { skip: !isGovernanceMode || !!selectedEmpId });
 
   const historyResponse = selectedEmpId ? employeeHistoryResponse : globalHistoryResponse;

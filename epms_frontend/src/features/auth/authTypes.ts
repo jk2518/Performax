@@ -8,6 +8,7 @@ export interface AuthRequest{
 export interface AuthResponse{
     accessToken: string;
     refreshToken: string;
+    user?: EmployeeResponse | null;
 }
 
 export interface RefreshTokenRequest{

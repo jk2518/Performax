@@ -39,6 +39,20 @@ class ScoringService:
         return 'NEEDS_IMPROVEMENT'
 
     @classmethod
+    def calculate_weighted_goal_progress(cls, goals) -> Decimal:
+        if not goals:
+            return Decimal('0.00')
+        total_weight = sum(getattr(g, 'weightage', None) or getattr(g, 'weight', None) or Decimal('1.00') for g in goals)
+        if total_weight > 0:
+            weighted_sum = sum(
+                (getattr(g, 'completion_percentage', None) or Decimal('0.00')) * (getattr(g, 'weightage', None) or getattr(g, 'weight', None) or Decimal('1.00'))
+                for g in goals
+            )
+            return round(Decimal(str(weighted_sum)) / Decimal(str(total_weight)), 2)
+        avg = sum(getattr(g, 'completion_percentage', None) or Decimal('0.00') for g in goals) / Decimal(len(goals))
+        return round(Decimal(str(avg)), 2)
+
+    @classmethod
     def calculate_cycle_score(cls, employee, cycle) -> dict:
         # 1. Goals and KPIs calculation
         goals = Goal.objects.filter(employee=employee, cycle=cycle)

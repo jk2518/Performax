@@ -38,7 +38,7 @@ class FeedbackSerializer(serializers.ModelSerializer):
 
     def to_internal_value(self, data):
         data = data.copy() if hasattr(data, 'copy') else dict(data)
-        recipient_val = data.get('recipient') or data.get('recipientId') or data.get('employeeId')
+        recipient_val = data.get('recipient') or data.get('recipientId') or data.get('recipient_id') or data.get('employeeId') or data.get('employee_id')
         if recipient_val and not data.get('recipient'):
             from apps.accounts.models import User
             from django.db.models import Q
@@ -50,8 +50,12 @@ class FeedbackSerializer(serializers.ModelSerializer):
             if user_target:
                 data['recipient'] = str(user_target.id)
 
-        if 'category' in data and not data.get('feedback_type'):
-            data['feedback_type'] = str(data['category']).upper()
+        if 'text' in data and not data.get('message'):
+            data['message'] = data['text']
+
+        if ('category' in data or 'type' in data) and not data.get('feedback_type'):
+            raw_type = str(data.get('category') or data.get('type')).upper()
+            data['feedback_type'] = 'PRAISE' if 'PRAISE' in raw_type else ('SUGGESTION' if 'SUGGEST' in raw_type else 'GENERAL')
 
         return super().to_internal_value(data)
 

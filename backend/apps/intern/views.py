@@ -103,10 +103,8 @@ class InternOverviewView(APIView):
         # 2. Active Evaluation Cycle
         today = date.today()
         active_cycle = PerformanceCycle.objects.filter(
-            Q(status=CycleStatus.ACTIVE) | Q(status=CycleStatus.REVIEW_PERIOD),
-            start_date__lte=today,
-            end_date__gte=today
-        ).order_by('-start_date').first()
+            Q(status=CycleStatus.ACTIVE) | Q(status=CycleStatus.REVIEW_PERIOD)
+        ).order_by('-start_date').first() or PerformanceCycle.objects.order_by('-start_date').first()
 
         cycle_data = None
         if active_cycle:
@@ -225,6 +223,8 @@ class InternOverviewView(APIView):
             'message': 'Success',
             'data': {
                 'profile': {
+                    'id': str(profile.id),
+                    'userId': str(user.id),
                     'name': profile.full_name,
                     'email': user.email,
                     'employeeCode': profile.employee_code,
@@ -782,10 +782,8 @@ class InternSelfAppraisalView(APIView):
         profile = get_authenticated_intern_profile(request.user)
         today = date.today()
         cycle = PerformanceCycle.objects.filter(
-            Q(status=CycleStatus.ACTIVE) | Q(status=CycleStatus.REVIEW_PERIOD),
-            start_date__lte=today,
-            end_date__gte=today
-        ).order_by('-start_date').first()
+            Q(status=CycleStatus.ACTIVE) | Q(status=CycleStatus.REVIEW_PERIOD)
+        ).order_by('-start_date').first() or PerformanceCycle.objects.order_by('-start_date').first()
 
         if not cycle:
             return Response({
@@ -814,10 +812,8 @@ class InternSelfAppraisalView(APIView):
         profile = get_authenticated_intern_profile(request.user)
         today = date.today()
         cycle = PerformanceCycle.objects.filter(
-            Q(status=CycleStatus.ACTIVE) | Q(status=CycleStatus.REVIEW_PERIOD),
-            start_date__lte=today,
-            end_date__gte=today
-        ).order_by('-start_date').first()
+            Q(status=CycleStatus.ACTIVE) | Q(status=CycleStatus.REVIEW_PERIOD)
+        ).order_by('-start_date').first() or PerformanceCycle.objects.order_by('-start_date').first()
 
         if not cycle:
             return Response({'code': 400, 'message': 'No active evaluation cycle open.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -965,8 +961,8 @@ class InternFeedbackReplyView(APIView):
         if not published_appraisal.allow_intern_reply:
             return Response({'code': 403, 'message': 'Replies to this feedback are not currently permitted.'}, status=status.HTTP_403_FORBIDDEN)
 
-        reply_text = request.data.get('replyText') or request.data.get('reply_text', '')
-        if not reply_text.strip():
+        reply_text = request.data.get('replyText') or request.data.get('reply_text') or request.data.get('reply') or request.data.get('message', '')
+        if not reply_text or not str(reply_text).strip():
             return Response({'code': 400, 'message': 'Reply text cannot be empty.'}, status=status.HTTP_400_BAD_REQUEST)
 
         reply = InternFeedbackReply.objects.create(

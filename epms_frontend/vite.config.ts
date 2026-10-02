@@ -24,8 +24,10 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
+    allowedHosts: true,
     proxy: {
       '/api': apiProxy(false),
+      '/media': apiProxy(false),
       '/auth': apiProxy(false),
       '/dashboard': apiProxy(true),
       '/departments': apiProxy(true),
@@ -51,6 +53,8 @@ export default defineConfig({
       '/manager-evaluations': apiProxy(false),
       '/public-diagnostics': apiProxy(false),
       '/reports': apiProxy(true),
+      '/manager': apiProxy(true),
+      '/intern': apiProxy(true),
     },
   },
 })

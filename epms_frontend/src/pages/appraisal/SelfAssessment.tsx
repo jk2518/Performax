@@ -70,7 +70,7 @@ const SelfAssessment = () => {
   const handleCommentChange = (qId: string, val: string) => setResponses(p => ({ ...p, [qId]: { ...p[qId], comment: val } }));
 
   const buildPayload = () => Object.keys(responses).map(qId => ({
-    questionId: Number(qId),
+    questionId: isNaN(Number(qId)) ? qId : Number(qId),
     ratingValue: responses[qId].ratingValue,
     isCompleted: true,
     comment: responses[qId].comment || null,
@@ -103,7 +103,14 @@ const SelfAssessment = () => {
     </div>
   );
 
-  const isOwner = Number(user?.id) === Number(formData.employeeId);
+  const isOwner = Boolean(
+    user && (
+      String(user.id) === String(formData.employeeId) ||
+      (user.profile && String(user.profile.id) === String(formData.employeeId)) ||
+      ((user as any).profileId && String((user as any).profileId) === String(formData.employeeId)) ||
+      ((user as any).employeeId && String((user as any).employeeId) === String(formData.employeeId))
+    )
+  );
   const isReadOnly = !!formData.submitted || !isOwner;
   const isDisabled = isSubmitting || isReadOnly;
   const canExport = appraisalDetail?.status === 'HR_APPROVED' || appraisalDetail?.status === 'FINALIZED' || appraisalDetail?.status === 'ARCHIVED';
