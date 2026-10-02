@@ -41,3 +41,7 @@ backend/staticfiles/
 .ai/
 .agent/
 .claude/
+
+# Local-only Private Documents (Never push to GitHub)
+LIST_OF_BUGS_DISCOVERED.md
+*BUGS_DISCOVERED*
