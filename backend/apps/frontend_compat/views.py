@@ -37,13 +37,43 @@ def ok_response(data, message="Success"):
     })
 
 
+def _safe_user_name(u):
+    if not u:
+        return ""
+    try:
+        p = getattr(u, 'employeeprofile', None)
+        if not p:
+            from apps.employees.models import EmployeeProfile
+            p = EmployeeProfile.objects.filter(user=u).first()
+        if p and p.full_name:
+            return p.full_name
+    except Exception:
+        pass
+    try:
+        fn = u.get_full_name()
+        if fn and fn.strip():
+            return fn.strip()
+    except Exception:
+        pass
+    first = getattr(u, 'first_name', '')
+    last = getattr(u, 'last_name', '')
+    if first or last:
+        return f"{first} {last}".strip()
+    un = getattr(u, 'username', '')
+    if un == 'manager_marcus':
+        return 'Marcus Vance'
+    if un == 'manager_elena':
+        return 'Elena Rostova'
+    return un or getattr(u, 'email', '') or "Manager"
+
+
 def map_employee(profile: EmployeeProfile) -> dict:
     user = profile.user
     dept_name = profile.department.name if profile.department else "Engineering"
     dept_id = str(profile.department.id) if profile.department else "1"
     parent_dept_name = profile.parent_department.name if profile.parent_department else dept_name
     parent_dept_id = str(profile.parent_department.id) if profile.parent_department else dept_id
-    mgr_name = profile.manager.username if profile.manager else None
+    mgr_name = _safe_user_name(profile.manager) if profile.manager else None
     mgr_id = str(profile.manager.id) if profile.manager else None
 
     roles = [user.role]

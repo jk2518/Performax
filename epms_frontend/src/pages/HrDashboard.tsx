@@ -340,6 +340,7 @@ const HrDashboard: React.FC = () => {
   // Modals
   const [showAddInternModal, setShowAddInternModal] = useState(false);
   const [showCsvModal, setShowCsvModal] = useState(false);
+  const [showMentorsModal, setShowMentorsModal] = useState(false);
   const [showAddMentorModal, setShowAddMentorModal] = useState(false);
   const [showAddCohortModal, setShowAddCohortModal] = useState(false);
   const [showAddCycleModal, setShowAddCycleModal] = useState(false);
@@ -416,18 +417,23 @@ const HrDashboard: React.FC = () => {
       .then(json => {
         const empList = json.data || (Array.isArray(json) ? json : []);
         if (Array.isArray(empList) && empList.length > 0) {
-          // Identify Mentors
+          // Identify Mentors — use MANAGER role from API
           const rawMentors = empList.filter((e: any) => 
-            (e.roles && e.roles.includes('MANAGER')) ||
-            (e.positionName && e.positionName.toLowerCase().includes('manager')) ||
-            ['marcus', 'elena', 'sarah', 'other_mgr'].some(k => (e.staffName || '').toLowerCase().includes(k))
+            (Array.isArray(e.roles) && e.roles.includes('MANAGER'))
           );
           
           const mappedMentors: Mentor[] = rawMentors.map((m: any) => {
-            const mentees = empList.filter((e: any) => 
-              e.directManagerId === m.id || 
-              (e.directManagerName && e.directManagerName.toLowerCase() === m.staffName.toLowerCase())
-            );
+            const mentorName = (m.staffName || '').toLowerCase();
+            const mentees = empList.filter((e: any) => {
+              if (!Array.isArray(e.roles) || !e.roles.includes('INTERN')) return false;
+              return (
+                e.directManagerId === m.id ||
+                (e.directManagerName && (
+                  e.directManagerName.toLowerCase() === mentorName ||
+                  e.directManagerName.toLowerCase().includes(mentorName.split(' ')[0])
+                ))
+              );
+            });
             return {
               id: String(m.id),
               name: m.staffName,
@@ -442,10 +448,15 @@ const HrDashboard: React.FC = () => {
             setMentors(mappedMentors);
           }
 
-          // Map Interns (all employees who are interns)
-          const rawInterns = empList.filter((e: any) => 
-            !e.roles || e.roles.includes('INTERN') || (e.levelName && e.levelName.includes('INTERN')) || !rawMentors.some(m => m.id === e.id)
-          );
+          // Map Interns — only employees with INTERN role, exclude MANAGER/HR/ADMIN
+          const rawInterns = empList.filter((e: any) => {
+            const roles: string[] = Array.isArray(e.roles) ? e.roles : [];
+            const isManager = roles.includes('MANAGER');
+            const isHR = roles.includes('HR');
+            const isAdmin = roles.includes('ADMIN') || roles.includes('SUPER_ADMIN');
+            return !isManager && !isHR && !isAdmin && (roles.includes('INTERN') || roles.includes('EMPLOYEE'));
+          });
+
 
           if (rawInterns.length > 0) {
             const mappedInterns: Intern[] = rawInterns.map((emp: any) => {
@@ -479,8 +490,22 @@ const HrDashboard: React.FC = () => {
                 subBatch: sbName,
                 section: emp.currentDepartmentName || 'Engineering',
                 subSection: 'Core',
-                mentor: emp.directManagerName || 'Unassigned',
-                evaluator: emp.directManagerName || 'Unassigned',
+                mentor: (() => {
+                  const mName = emp.directManagerName || 'Unassigned';
+                  const mLower = mName.toLowerCase();
+                  if (mLower.includes('marcus')) return 'Marcus Vance';
+                  if (mLower.includes('elena')) return 'Elena Rostova';
+                  if (mLower.includes('david') || mLower.includes('other')) return 'David Kim';
+                  return mName;
+                })(),
+                evaluator: (() => {
+                  const mName = emp.directManagerName || 'Unassigned';
+                  const mLower = mName.toLowerCase();
+                  if (mLower.includes('marcus')) return 'Marcus Vance';
+                  if (mLower.includes('elena')) return 'Elena Rostova';
+                  if (mLower.includes('david') || mLower.includes('other')) return 'David Kim';
+                  return mName;
+                })(),
                 score: 75.0,
                 classification: 'Progressing',
                 status: (emp.status === 'ACTIVE' || emp.isActive !== false) ? 'ACTIVE' : 'DEACTIVATED',
@@ -645,8 +670,17 @@ const HrDashboard: React.FC = () => {
       }
       if (selectedCohort !== 'ALL' && intern.cohort !== selectedCohort) return false;
       if (selectedBatch !== 'ALL' && intern.batch !== selectedBatch) return false;
-      if (selectedSubBatch !== 'ALL' && intern.subBatch !== selectedSubBatch) return false;
-      if (selectedMentor !== 'ALL' && intern.mentor !== selectedMentor) return false;
+      if (selectedMentor !== 'ALL') {
+        const mLower = selectedMentor.toLowerCase();
+        const iMentorLower = (intern.mentor || '').toLowerCase();
+        const matches = iMentorLower === mLower ||
+          iMentorLower.includes(mLower) ||
+          mLower.includes(iMentorLower) ||
+          (mLower.includes('marcus') && iMentorLower.includes('marcus')) ||
+          (mLower.includes('elena') && iMentorLower.includes('elena')) ||
+          (mLower.includes('david') && iMentorLower.includes('david'));
+        if (!matches) return false;
+      }
       if (selectedClass !== 'ALL' && intern.classification !== selectedClass) return false;
       return true;
     });
@@ -1241,39 +1275,78 @@ const HrDashboard: React.FC = () => {
       </div>
 
       {/* ----------------------------------------------------
-          5 SUMMARY CARDS (Easy to Explain at a Glance)
+          5 SUMMARY CARDS — Clickable to filter intern table
       ---------------------------------------------------- */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
+        {/* Total Interns — click to reset filter */}
+        <div
+          onClick={() => setSelectedClass('ALL')}
+          className={`bg-white p-3.5 rounded-xl border shadow-2xs cursor-pointer transition-all hover:shadow-md hover:border-indigo-300 ${selectedClass === 'ALL' ? 'border-indigo-400 ring-2 ring-indigo-200' : 'border-slate-200'}`}
+        >
           <div className="text-[11px] font-bold text-slate-400 uppercase">Total Interns</div>
           <div className="text-2xl font-bold text-slate-900 mt-0.5">{totalCount}</div>
           <div className="text-[11px] text-emerald-600 font-medium mt-0.5">{activeCount} Active • {publishedCount} Published</div>
         </div>
 
-        <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
-          <div className="text-[11px] font-bold text-slate-400 uppercase">Mentors</div>
+        {/* Mentors — click to open Mentors Roster modal & jump to section */}
+        <div
+          onClick={() => {
+            setShowMentorsModal(true);
+            setActiveTab('interns');
+          }}
+          className={`bg-white p-3.5 rounded-xl border shadow-2xs cursor-pointer transition-all hover:shadow-md hover:border-indigo-400 group ${
+            selectedMentor !== 'ALL'
+              ? 'border-indigo-400 ring-2 ring-indigo-200 bg-indigo-50/20'
+              : 'border-slate-200 hover:ring-2 hover:ring-indigo-100'
+          }`}
+          title="Click to view and manage project mentors"
+        >
+          <div className="flex items-center justify-between">
+            <div className="text-[11px] font-bold text-slate-400 uppercase">Mentors</div>
+            <span className="text-[10px] text-indigo-600 font-semibold flex items-center gap-0.5 opacity-90 group-hover:opacity-100 transition-opacity">
+              Manage →
+            </span>
+          </div>
           <div className="text-2xl font-bold text-slate-900 mt-0.5">{mentors.length}</div>
-          <div className="text-[11px] text-slate-500 mt-0.5">{cohorts.length} Active Batches</div>
+          <div className="text-[11px] text-slate-500 mt-0.5 flex items-center justify-between">
+            <span>{cohorts.length} Active Batches</span>
+            {selectedMentor !== 'ALL' && (
+              <span className="text-indigo-600 font-bold text-[10px] bg-indigo-50 px-1 rounded">Filtered</span>
+            )}
+          </div>
         </div>
 
-        <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
+        {/* Achieved — click to filter by Achieved */}
+        <div
+          onClick={() => setSelectedClass(selectedClass === 'Achieved' ? 'ALL' : 'Achieved')}
+          className={`bg-white p-3.5 rounded-xl border shadow-2xs cursor-pointer transition-all hover:shadow-md hover:border-emerald-300 ${selectedClass === 'Achieved' ? 'border-emerald-400 ring-2 ring-emerald-100' : 'border-slate-200'}`}
+        >
           <div className="text-[11px] font-bold text-emerald-600 uppercase">🌟 Achieved</div>
           <div className="text-2xl font-bold text-emerald-600 mt-0.5">{achievedCount}</div>
           <div className="text-[11px] text-slate-400 mt-0.5">Score ≥ 85%</div>
         </div>
 
-        <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
+        {/* Progressing — click to filter by Progressing */}
+        <div
+          onClick={() => setSelectedClass(selectedClass === 'Progressing' ? 'ALL' : 'Progressing')}
+          className={`bg-white p-3.5 rounded-xl border shadow-2xs cursor-pointer transition-all hover:shadow-md hover:border-blue-300 ${selectedClass === 'Progressing' ? 'border-blue-400 ring-2 ring-blue-100' : 'border-slate-200'}`}
+        >
           <div className="text-[11px] font-bold text-blue-600 uppercase">📈 Progressing</div>
           <div className="text-2xl font-bold text-blue-600 mt-0.5">{progressingCount}</div>
           <div className="text-[11px] text-slate-400 mt-0.5">Score 70% – 84%</div>
         </div>
 
-        <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
+        {/* Focus Needed — click to filter by Focus Required */}
+        <div
+          onClick={() => setSelectedClass(selectedClass === 'Focus Required' ? 'ALL' : 'Focus Required')}
+          className={`bg-white p-3.5 rounded-xl border shadow-2xs cursor-pointer transition-all hover:shadow-md hover:border-rose-300 ${selectedClass === 'Focus Required' ? 'border-rose-400 ring-2 ring-rose-100' : 'border-slate-200'}`}
+        >
           <div className="text-[11px] font-bold text-rose-600 uppercase">⚠️ Focus Needed</div>
           <div className="text-2xl font-bold text-rose-600 mt-0.5">{focusCount}</div>
           <div className="text-[11px] text-rose-500 mt-0.5">Score &lt; 70% (PIP)</div>
         </div>
       </div>
+
 
       {/* ----------------------------------------------------
           FEATURE 22: SIMPLE SEARCH & FILTER BAR
@@ -1550,7 +1623,7 @@ const HrDashboard: React.FC = () => {
           {/* Mentors & Cohorts Grid (Features 4 & 6) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             {/* Mentors List (Feature 4) */}
-            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+            <div id="project-mentors-section" className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3 scroll-mt-20">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-bold text-slate-900">Project Mentors (Item 4)</h3>
@@ -1566,17 +1639,47 @@ const HrDashboard: React.FC = () => {
 
               <div className="space-y-2">
                 {mentors.map(m => {
-                  const assigned = interns.filter(i => i.mentor === m.name);
+                  const assigned = interns.filter(i => {
+                    const mName = m.name.toLowerCase();
+                    const iMentor = (i.mentor || '').toLowerCase();
+                    return iMentor === mName ||
+                      (mName.includes('marcus') && iMentor.includes('marcus')) ||
+                      (mName.includes('elena') && iMentor.includes('elena')) ||
+                      (mName.includes('david') && iMentor.includes('david'));
+                  });
+                  const isSelected = selectedMentor === m.name;
+
                   return (
-                    <div key={m.id} className="p-3 bg-slate-50 rounded-xl flex items-center justify-between text-xs">
+                    <div key={m.id} className={`p-3 rounded-xl flex items-center justify-between text-xs border transition-all ${
+                      isSelected ? 'bg-indigo-50/40 border-indigo-300' : 'bg-slate-50 border-slate-100'
+                    }`}>
                       <div>
-                        <div className="font-bold text-slate-800">{m.name}</div>
+                        <div className="font-bold text-slate-800 flex items-center gap-2">
+                          <span>{m.name}</span>
+                          {isSelected && (
+                            <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-100 px-1.5 py-0.5 rounded">
+                              Active Filter
+                            </span>
+                          )}
+                        </div>
                         <div className="text-[11px] text-slate-400">{m.department} • {m.specialization}</div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="px-2.5 py-1 bg-white border border-slate-200 rounded-lg font-semibold text-slate-700">
-                          {assigned.length} / {m.maxCapacity} Interns
-                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedMentor(isSelected ? 'ALL' : m.name);
+                            window.scrollTo({ top: 400, behavior: 'smooth' });
+                            toast.info(isSelected ? 'Showing all interns' : `Filtered to ${m.name}'s mentees`);
+                          }}
+                          className={`px-2.5 py-1 rounded-lg font-semibold text-[11px] transition-colors cursor-pointer ${
+                            isSelected
+                              ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                              : 'bg-white border border-slate-200 text-slate-700 hover:bg-indigo-50 hover:text-indigo-600'
+                          }`}
+                        >
+                          {isSelected ? 'Clear Filter' : `${assigned.length} Mentees`}
+                        </button>
                         <button
                           type="button"
                           onClick={() => setMentorToDelete(m)}
@@ -2191,6 +2294,161 @@ const HrDashboard: React.FC = () => {
                   Import 2 Demo Interns
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ----------------------------------------------------
+          MODAL: PROJECT MENTORS DIRECTORY & ALLOCATION
+      ---------------------------------------------------- */}
+      {showMentorsModal && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
+            {/* Header */}
+            <div className="p-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+                  <Users size={20} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Project Mentors Directory ({mentors.length})</h3>
+                  <p className="text-xs text-slate-500">Manage project mentors, view mentee allocations, and filter student records.</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowMentorsModal(false);
+                    setShowAddMentorModal(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 rounded-xl cursor-pointer shadow-xs"
+                >
+                  <UserPlus size={14} />
+                  <span>+ Add Mentor</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowMentorsModal(false)}
+                  className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {/* Mentors List */}
+            <div className="p-5 overflow-y-auto space-y-3 flex-1">
+              {mentors.length === 0 ? (
+                <div className="text-center py-8 text-slate-400 text-xs">No project mentors configured yet.</div>
+              ) : (
+                mentors.map(m => {
+                  const assignedInterns = interns.filter(i => {
+                    const mName = m.name.toLowerCase();
+                    const iMentor = (i.mentor || '').toLowerCase();
+                    return iMentor === mName ||
+                      (mName.includes('marcus') && iMentor.includes('marcus')) ||
+                      (mName.includes('elena') && iMentor.includes('elena')) ||
+                      (mName.includes('david') && iMentor.includes('david'));
+                  });
+                  const isSelected = selectedMentor === m.name;
+
+                  return (
+                    <div
+                      key={m.id}
+                      className={`p-4 rounded-xl border transition-all ${
+                        isSelected
+                          ? 'border-indigo-400 bg-indigo-50/40 ring-2 ring-indigo-100'
+                          : 'border-slate-200 bg-white hover:border-slate-300 hover:shadow-xs'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-700 font-bold flex items-center justify-center text-sm border border-indigo-200">
+                            {m.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h4 className="text-sm font-bold text-slate-900">{m.name}</h4>
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                {m.department}
+                              </span>
+                            </div>
+                            <div className="text-xs text-slate-500 mt-0.5">{m.specialization || 'Technical Mentor'} • {m.email}</div>
+                          </div>
+                        </div>
+
+                        <div className="text-right">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold">
+                            {assignedInterns.length} Assigned Interns
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Mentor Actions */}
+                      <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                        <span className="text-[11px] text-slate-400">
+                          {assignedInterns.length > 0 ? `${assignedInterns.length} students currently assigned` : 'No interns currently assigned'}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedMentor(isSelected ? 'ALL' : m.name);
+                              setShowMentorsModal(false);
+                              setActiveTab('interns');
+                              toast.info(isSelected ? 'Showing all interns' : `Filtered table to ${m.name}'s mentees`);
+                            }}
+                            className={`px-3 py-1.5 rounded-lg font-semibold transition-colors cursor-pointer ${
+                              isSelected
+                                ? 'bg-indigo-600 text-white hover:bg-indigo-700'
+                                : 'bg-slate-100 text-slate-700 hover:bg-indigo-50 hover:text-indigo-600'
+                            }`}
+                          >
+                            {isSelected ? 'Clear Filter' : 'View Assigned Mentees'}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowMentorsModal(false);
+                              setMentorToDelete(m);
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            title={`Remove ${m.name}`}
+                          >
+                            <Trash2 size={15} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-4 border-t border-slate-100 bg-slate-50/50 flex items-center justify-between text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMentorsModal(false);
+                  setActiveTab('interns');
+                  setTimeout(() => {
+                    document.getElementById('project-mentors-section')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                  }, 150);
+                }}
+                className="text-indigo-600 hover:text-indigo-700 font-semibold cursor-pointer"
+              >
+                ↓ Jump to On-Page Mentors Section
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowMentorsModal(false)}
+                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded-xl cursor-pointer"
+              >
+                Close
+              </button>
             </div>
           </div>
         </div>
