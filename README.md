@@ -136,5 +136,6 @@ All architectural specifications, persona guides, and reports are located in the
 - 🧪 **[docs/MODULE_WISE_SOFTWARE_TEST_CASES.md](docs/MODULE_WISE_SOFTWARE_TEST_CASES.md)**: Module-wise Software Testing Specification (44 test cases across all 5 system modules).
 - 🧪 **[docs/TESTING.md](docs/TESTING.md)**: Test matrix, invariant checks, coverage, and CI configuration.
 - 🐛 **[docs/PERFORMAX_BUGS_RESOLVED_TABLE.md](docs/PERFORMAX_BUGS_RESOLVED_TABLE.md)**: Comprehensive 34-Bug Audit & Resolution Matrix across all modules.
+- 📋 **[docs/ALL_RESOLVED_BUGS_EXPLANATION.md](docs/ALL_RESOLVED_BUGS_EXPLANATION.md)**: Detailed Root Cause & Technical Resolution Report for all 34 bugs.
 - ⚖️ **[docs/DECISIONS.md](docs/DECISIONS.md)**: Architectural Decision Records (ADR 001 to ADR 007).
 - 🔍 **[docs/REPOSITORY_AUDIT.md](docs/REPOSITORY_AUDIT.md)**: Architectural audit and gap analysis of reference implementation.
